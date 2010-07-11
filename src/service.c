@@ -19,6 +19,8 @@
 
 #include "config.h"
 
+#include <stdlib.h>
+
 #include <gio/gunixsocketaddress.h>
 
 #include <telepathy-glib/channel.h>
@@ -147,6 +149,10 @@ main (gint argc, gchar *argv[])
   g_type_init ();
 
   dbus = tp_dbus_daemon_dup (NULL);
+  if (!tp_dbus_daemon_request_name (dbus,
+      "org.freedesktop.Telepathy.Client.TelepathySSH", TRUE, NULL))
+    return EXIT_FAILURE;
+
   client = tp_simple_handler_new (dbus, FALSE, FALSE, "TelepathySSHService",
       FALSE, got_channel_cb, NULL, NULL);
 
