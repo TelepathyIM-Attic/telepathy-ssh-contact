@@ -284,7 +284,7 @@ main (gint argc, gchar *argv[])
   /* Register an handler for the StreamTube channel we'll request */
   dbus = tp_dbus_daemon_dup (NULL);
   client = tp_simple_handler_new (dbus, FALSE, FALSE, "TelepathySSHClient",
-      FALSE, got_channel_cb, NULL, NULL);
+      TRUE, got_channel_cb, NULL, NULL);
 
   tp_base_client_take_handler_filter (client, tp_asv_new (
       TP_PROP_CHANNEL_CHANNEL_TYPE, G_TYPE_STRING, TP_IFACE_CHANNEL_TYPE_STREAM_TUBE,
