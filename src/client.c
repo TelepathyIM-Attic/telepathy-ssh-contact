@@ -24,33 +24,48 @@
 
 #include <glib/gstdio.h>
 #include <gio/gunixsocketaddress.h>
-
-#include <telepathy-glib/account-manager.h>
-#include <telepathy-glib/channel.h>
-#include <telepathy-glib/channel-dispatcher.h>
-#include <telepathy-glib/channel-request.h>
-#include <telepathy-glib/gtypes.h>
-#include <telepathy-glib/simple-handler.h>
-#include <telepathy-glib/interfaces.h>
-#include <telepathy-glib/util.h>
+#include <telepathy-glib/telepathy-glib.h>
 
 #include "common.h"
 
+static gboolean success = TRUE;
 static GMainLoop *loop = NULL;
+static gchar *unix_path = NULL;
+
+static void
+remove_unix_path (void)
+{
+  gchar *p;
+
+  g_unlink (unix_path);
+  p = g_strrstr (unix_path, G_DIR_SEPARATOR_S);
+  *p = '\0';
+  g_rmdir (unix_path);
+  g_free (unix_path);
+}
+
+static void
+throw_error (const GError *error)
+{
+  g_debug ("Error: %s", error ? error->message : "No error message");
+  success = FALSE;
+  g_main_loop_quit (loop);
+}
 
 static void
 splice_cb (gpointer user_data)
 {
-  gchar *path = user_data;
-  gchar *p;
-
-  g_unlink (path);
-  p = g_strrstr (path, G_DIR_SEPARATOR_S);
-  *p = '\0';
-  g_rmdir (path);
-  g_free (path);
-
   g_main_loop_quit (loop);
+}
+
+static void
+offer_tube_cb (TpChannel *channel,
+    const GError *error,
+    gpointer user_data,
+    GObject *weak_object)
+{
+  if (error != NULL)
+    throw_error (error);
 }
 
 static void
@@ -60,68 +75,79 @@ channel_prepare_cb (GObject *object,
 {
   TpChannel *channel = TP_CHANNEL (object);
   gchar *dir;
-  gchar *path;
-  GSocketAddress *socket_address;
-  GInetAddress * inet_address;
-  GSocket *socket;
-  GArray *array;
-  GValue address = { 0, };
+  GSocketAddress *socket_address = NULL;
+  GInetAddress * inet_address = NULL;
+  GSocket *socket = NULL;
+  GSocketListener *listener = NULL;
+  GSocketConnection *tube_connection = NULL;
+  GSocketConnection *ssh_connection = NULL;
+  GValue *address;
   GHashTable *parameters;
   guint port;
-  GSocketListener *listener;
-  GSocketConnection *tube_connection;
-  GSocketConnection *ssh_connection;
+  GError *error = NULL;
 
-  g_assert (tp_proxy_prepare_finish (TP_PROXY (channel), res, NULL));
+  if (!tp_proxy_prepare_finish (TP_PROXY (channel), res, &error))
+    goto OUT;
 
   /* We have to offer a socket, but we are client side... so we create a unix
    * socket and we'll bridge it to a local IPv4 socket where ssh client can
    * connect */
   dir = g_build_filename (g_get_tmp_dir (), "telepathy-ssh-XXXXXX", NULL);
   dir = mkdtemp (dir);
-  path = g_build_filename (dir, "unix-socket", NULL);
-  socket_address = g_unix_socket_address_new (path);
-  socket = g_socket_new (G_SOCKET_FAMILY_UNIX, G_SOCKET_TYPE_STREAM,
-      G_SOCKET_PROTOCOL_DEFAULT, NULL);
-  g_socket_bind (socket, socket_address, FALSE, NULL);
-  g_object_unref (socket_address);
+  unix_path = g_build_filename (dir, "unix-socket", NULL);
+  g_atexit (remove_unix_path);
   g_free (dir);
 
+  socket = g_socket_new (G_SOCKET_FAMILY_UNIX, G_SOCKET_TYPE_STREAM,
+      G_SOCKET_PROTOCOL_DEFAULT, &error);
+  if (socket == NULL)
+    goto OUT;
+
+  socket_address = g_unix_socket_address_new (unix_path);
+  if (!g_socket_bind (socket, socket_address, FALSE, &error))
+    goto OUT;
+
   /* Offer the socket */
-  array = g_array_sized_new (FALSE, FALSE, sizeof (guchar), strlen (path));
-  g_array_append_vals (array, path, strlen (path));
-  g_value_init (&address, DBUS_TYPE_G_UCHAR_ARRAY);
-  g_value_take_boxed (&address, array);
+  address = tp_address_variant_from_g_socket_address (socket_address,
+      TP_SOCKET_ADDRESS_TYPE_UNIX, &error);
+  if (address == NULL)
+    goto OUT;
   parameters = g_hash_table_new (NULL, NULL);
-
   tp_cli_channel_type_stream_tube_call_offer (channel, -1,
-      TP_SOCKET_ADDRESS_TYPE_UNIX, &address,
+      TP_SOCKET_ADDRESS_TYPE_UNIX, address,
       TP_SOCKET_ACCESS_CONTROL_LOCALHOST, parameters,
-      NULL, NULL, NULL, NULL);
-
-  g_value_reset (&address);
+      offer_tube_cb, NULL, NULL, NULL);
+  tp_g_value_slice_free (address);
   g_hash_table_unref (parameters);
 
   /* Wait for the service side to connect on our socket */
   listener = g_socket_listener_new ();
-  g_socket_listen (socket, NULL);
-  g_socket_listener_add_socket (listener, socket, NULL, NULL);
-  g_object_unref (socket);
-  tube_connection = g_socket_listener_accept (listener, NULL, NULL, NULL);
+  if (!g_socket_listen (socket, &error))
+    goto OUT;
+  if (!g_socket_listener_add_socket (listener, socket, NULL, &error))
+    goto OUT;
+  tube_connection = g_socket_listener_accept (listener, NULL, NULL, &error);
+  if (tube_connection == NULL)
+    goto OUT;
 
   /* Create an IPv4 socket */
+  tp_clear_object (&socket);
+  socket = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_STREAM,
+      G_SOCKET_PROTOCOL_DEFAULT, &error);
+  if (socket == NULL)
+    goto OUT;
+  tp_clear_object (&socket_address);
   inet_address = g_inet_address_new_loopback (G_SOCKET_FAMILY_IPV4);
   socket_address = g_inet_socket_address_new (inet_address, 0);
-  socket = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_STREAM,
-      G_SOCKET_PROTOCOL_DEFAULT, NULL);
-  g_socket_bind (socket, socket_address, FALSE, NULL);
-  g_object_unref (inet_address);
-  g_object_unref (socket_address);
+  if (!g_socket_bind (socket, socket_address, FALSE, &error))
+    goto OUT;
 
   /* Get the port on which we got bound */
-  socket_address = g_socket_get_local_address (socket, NULL);
+  tp_clear_object (&socket_address);
+  socket_address = g_socket_get_local_address (socket, &error);
+  if (socket_address == NULL)
+    goto OUT;
   port = g_inet_socket_address_get_port (G_INET_SOCKET_ADDRESS (socket_address));  
-  g_object_unref (socket_address);
 
   /* Start ssh client, it will connect on our IPv4 socket */
   if (fork() == 0)
@@ -133,17 +159,29 @@ channel_prepare_cb (GObject *object,
     }
 
   /* Wait for the ssh client to connect on our socket */
-  g_socket_listen (socket, NULL);
-  g_socket_listener_add_socket (listener, socket, NULL, NULL);
-  g_object_unref (socket);
-  ssh_connection = g_socket_listener_accept (listener, NULL, NULL, NULL);
-  g_object_unref (listener);
+  if (!g_socket_listen (socket, &error))
+    goto OUT;
+  if (!g_socket_listener_add_socket (listener, socket, NULL, &error))
+    goto OUT;
+  ssh_connection = g_socket_listener_accept (listener, NULL, NULL, &error);
+  if (ssh_connection == NULL)
+    goto OUT;
 
+  /* Splice tube and ssh connections */
   _g_io_stream_splice (G_IO_STREAM (tube_connection),
-      G_IO_STREAM (ssh_connection), splice_cb, path);
+      G_IO_STREAM (ssh_connection), splice_cb, NULL);
 
-  g_object_unref (tube_connection);
-  g_object_unref (ssh_connection);
+OUT:
+  if (error != NULL)
+    throw_error (error);
+
+  tp_clear_object (&socket_address);
+  tp_clear_object (&inet_address);
+  tp_clear_object (&socket);
+  tp_clear_object (&listener);
+  tp_clear_object (&tube_connection);
+  tp_clear_object (&ssh_connection);
+  g_clear_error (&error);
 }
 
 static void
@@ -156,7 +194,6 @@ got_channel_cb (TpSimpleHandler *handler,
     TpHandleChannelsContext *context,
     gpointer user_data)
 {
-  GQuark features[] = { TP_CHANNEL_FEATURE_CORE };
   GList *l;
 
   for (l = channels; l != NULL; l = l->next)
@@ -167,11 +204,21 @@ got_channel_cb (TpSimpleHandler *handler,
           TP_IFACE_CHANNEL_TYPE_STREAM_TUBE))
         continue;
 
-      tp_proxy_prepare_async (TP_PROXY (channel), features,
+      tp_proxy_prepare_async (TP_PROXY (channel), NULL,
           channel_prepare_cb, NULL);
     }
 
   tp_handle_channels_context_accept (context);
+}
+
+static void
+request_proceed_cb (TpChannelRequest *request,
+    const GError *error,
+    gpointer user_data,
+    GObject *weak_object)
+{
+  if (error != NULL)
+    throw_error (error);
 }
 
 static void
@@ -182,17 +229,25 @@ create_channel_cb (TpChannelDispatcher *dispatcher,
     GObject *weak_object)
 {
   TpChannelRequest *request;
+  GError *err = NULL;
 
   if (error != NULL)
     {
-      g_debug ("Error: %s", error->message);
-      g_assert_not_reached ();
+      throw_error (error);
+      return;
     }
 
   request = tp_channel_request_new (tp_proxy_get_dbus_daemon (TP_PROXY (dispatcher)),
-      request_path, NULL, NULL);
+      request_path, NULL, &err);
+  if (request == NULL)
+    {
+      throw_error (err);
+      g_clear_error (&err);
+      return;
+    }
 
-  tp_cli_channel_request_call_proceed (request, -1, NULL, NULL, NULL, NULL);
+  tp_cli_channel_request_call_proceed (request, -1, request_proceed_cb,
+      NULL, NULL, NULL);
   g_object_unref (request);
 }
 
@@ -214,8 +269,15 @@ account_manager_prepare_cb (GObject *object,
   TpChannelDispatcher *dispatcher;
   GList *accounts, *l;
   GHashTable *request;
+  gboolean found = FALSE;
+  GError *error = NULL;
 
-  g_assert (tp_account_manager_prepare_finish (account_manager, res, NULL));
+  if (!tp_account_manager_prepare_finish (account_manager, res, &error))
+    {
+      throw_error (error);
+      g_clear_error (&error);
+      return;
+    }
 
   dbus = tp_dbus_daemon_dup (NULL);
   dispatcher = tp_channel_dispatcher_new (dbus);
@@ -245,12 +307,20 @@ account_manager_prepare_cb (GObject *object,
       if (tp_strdiff (account_path, ctx->account_path))
         continue;
 
+      found = TRUE;
       tp_cli_channel_dispatcher_call_create_channel (dispatcher, -1,
           account_path, request, G_MAXINT64,
           tp_base_client_get_bus_name (ctx->client), create_channel_cb,
           NULL, NULL, NULL);
 
       break;
+    }
+
+  if (!found)
+    {
+      g_debug ("Account not found or offline");
+      success = FALSE;
+      g_main_loop_quit (loop);
     }
 
   g_free (ctx->account_path);
@@ -267,22 +337,26 @@ account_manager_prepare_cb (GObject *object,
 int
 main (gint argc, gchar *argv[])
 {
-  TpDBusDaemon *dbus;
-  TpBaseClient *client;
-  TpAccountManager *account_manager;
-  GQuark features[] = { TP_ACCOUNT_MANAGER_FEATURE_CORE };
+  TpDBusDaemon *dbus = NULL;
+  TpBaseClient *client = NULL;
+  TpAccountManager *account_manager = NULL;
   Context *ctx;
-
-  g_type_init ();
+  GError *error = NULL;
 
   if (argc != 3)
     {
       g_print ("Usage: %s <account id> <contact id>\n", argv[0]);
-      return EXIT_FAILURE;
+      success = FALSE;
+      goto OUT;
     }
 
+  g_type_init ();
+
   /* Register an handler for the StreamTube channel we'll request */
-  dbus = tp_dbus_daemon_dup (NULL);
+  dbus = tp_dbus_daemon_dup (&error);
+  if (dbus == NULL)
+    goto OUT;
+
   client = tp_simple_handler_new (dbus, FALSE, FALSE, "TelepathySSHClient",
       TRUE, got_channel_cb, NULL, NULL);
 
@@ -293,7 +367,8 @@ main (gint argc, gchar *argv[])
       TP_PROP_CHANNEL_REQUESTED, G_TYPE_BOOLEAN, TRUE,
       NULL));
 
-  tp_base_client_register (client, NULL);
+  if (!tp_base_client_register (client, &error))
+    goto OUT;
 
   ctx = g_slice_new0 (Context);
   ctx->account_path = g_strconcat (TP_ACCOUNT_OBJECT_PATH_BASE, argv[1], NULL);
@@ -302,17 +377,26 @@ main (gint argc, gchar *argv[])
 
   /* Get the account manager to request a tube with a contact */
   account_manager = tp_account_manager_dup ();
-  tp_account_manager_prepare_async (account_manager, features,
+  tp_account_manager_prepare_async (account_manager, NULL,
       account_manager_prepare_cb, ctx);
 
   loop = g_main_loop_new (NULL, FALSE);
   g_main_loop_run (loop);
 
-  g_main_loop_unref (loop);
-  g_object_unref (dbus);
-  g_object_unref (client);
-  g_object_unref (account_manager);
+OUT:
 
-  return EXIT_SUCCESS;
+  if (error != NULL)
+    {
+      success = FALSE;
+      g_debug ("Error: %s", error->message);
+    }
+
+  tp_clear_pointer (&loop, g_main_loop_unref);
+  tp_clear_object (&dbus);
+  tp_clear_object (&client);
+  tp_clear_object (&account_manager);
+  g_clear_error (&error);
+
+  return success ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
