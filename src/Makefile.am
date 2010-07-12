@@ -8,9 +8,9 @@ AM_CFLAGS = -Wall -g -Werror
 
 LDADD = $(TELEPATHY_SSH_LIBS)
 
-bin_PROGRAMS = telepathy-ssh-client telepathy-ssh-service
+bin_PROGRAMS = telepathy-ssh telepathy-ssh-service
 
-telepathy_ssh_client_SOURCES = \
+telepathy_ssh_SOURCES = \
 	common.c common.h \
 	client.c
 
