@@ -53,9 +53,97 @@ throw_error (const GError *error)
 }
 
 static void
-splice_cb (gpointer user_data)
+splice_cb (GIOStream *stream1,
+    GIOStream *stream2,
+    const GError *error,
+    gpointer user_data)
 {
-  g_main_loop_quit (loop);
+  if (error != NULL)
+    throw_error (error);
+  else
+    g_main_loop_quit (loop);
+}
+
+static void
+ssh_socket_connected_cb (GObject *source_object,
+    GAsyncResult *res,
+    gpointer user_data)
+{
+  GSocketListener *listener = G_SOCKET_LISTENER (source_object);
+  GSocketConnection *tube_connection = user_data;
+  GSocketConnection *ssh_connection;
+  GError *error = NULL;
+
+  ssh_connection = g_socket_listener_accept_finish (listener, res, NULL, &error);
+  if (ssh_connection == NULL)
+    {
+      throw_error (error);
+      g_object_unref (tube_connection);
+      return;
+    }
+
+  /* Splice tube and ssh connections */
+  _g_io_stream_splice (G_IO_STREAM (tube_connection),
+      G_IO_STREAM (ssh_connection), splice_cb, NULL);
+}
+
+static void
+tube_socket_connected_cb (GObject *source_object,
+    GAsyncResult *res,
+    gpointer user_data)
+{
+  GSocketListener *listener = G_SOCKET_LISTENER (source_object);
+  GSocketConnection *tube_connection;
+  GSocket *socket = NULL;
+  GInetAddress * inet_address = NULL;
+  GSocketAddress *socket_address = NULL;
+  guint port;
+  GError *error = NULL;
+
+  tube_connection = g_socket_listener_accept_finish (listener, res, NULL, &error);
+  if (tube_connection == NULL)
+    goto OUT;
+
+  /* Create the IPv4 socket, and listen for connection on it */
+  socket = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_STREAM,
+      G_SOCKET_PROTOCOL_DEFAULT, &error);
+  if (socket == NULL)
+    goto OUT;
+  inet_address = g_inet_address_new_loopback (G_SOCKET_FAMILY_IPV4);
+  socket_address = g_inet_socket_address_new (inet_address, 0);
+  if (!g_socket_bind (socket, socket_address, FALSE, &error))
+    goto OUT;
+  if (!g_socket_listen (socket, &error))
+    goto OUT;
+  if (!g_socket_listener_add_socket (listener, socket, NULL, &error))
+    goto OUT;
+
+  /* Get the port on which we got bound */
+  tp_clear_object (&socket_address);
+  socket_address = g_socket_get_local_address (socket, &error);
+  if (socket_address == NULL)
+    goto OUT;
+  port = g_inet_socket_address_get_port (G_INET_SOCKET_ADDRESS (socket_address));
+
+  g_socket_listener_accept_async (listener, NULL,
+    ssh_socket_connected_cb, g_object_ref (tube_connection));
+
+  /* Start ssh client, it will connect on our IPv4 socket */
+  if (fork() == 0)
+    {
+      gchar *port_str;
+
+      port_str = g_strdup_printf ("%d", port);
+      execlp ("ssh", "ssh", "127.0.0.1", "-p", port_str, NULL);
+    }
+
+OUT:
+
+  tp_clear_object (&tube_connection);
+  tp_clear_object (&socket);
+  tp_clear_object (&inet_address);
+  tp_clear_object (&socket_address);
+  g_clear_error (&error);
 }
 
 static void
@@ -64,6 +152,8 @@ offer_tube_cb (TpChannel *channel,
     gpointer user_data,
     GObject *weak_object)
 {
+  /* FIXME: If the offer failed, do we have to cancel the pending
+   * g_socket_listener_accept_async() ? */
   if (error != NULL)
     throw_error (error);
 }
@@ -75,37 +165,45 @@ channel_prepare_cb (GObject *object,
 {
   TpChannel *channel = TP_CHANNEL (object);
   gchar *dir;
-  GSocketAddress *socket_address = NULL;
-  GInetAddress * inet_address = NULL;
-  GSocket *socket = NULL;
   GSocketListener *listener = NULL;
-  GSocketConnection *tube_connection = NULL;
-  GSocketConnection *ssh_connection = NULL;
+  GSocket *socket = NULL;
+  GSocketAddress *socket_address = NULL;
   GValue *address;
   GHashTable *parameters;
-  guint port;
   GError *error = NULL;
 
   if (!tp_proxy_prepare_finish (TP_PROXY (channel), res, &error))
     goto OUT;
 
-  /* We have to offer a socket, but we are client side... so we create a unix
-   * socket and we'll bridge it to a local IPv4 socket where ssh client can
-   * connect */
+  /* We are client side, but we have to offer a socket... So we offer an unix
+   * socket on which the service side can connect. We also create an IPv4 socket
+   * on which the ssh client can connect. When both sockets are connected,
+   * we can forward all communications between them. */
+
+  listener = g_socket_listener_new ();
+
+  /* Create temporary file for our unix socket */
   dir = g_build_filename (g_get_tmp_dir (), "telepathy-ssh-XXXXXX", NULL);
   dir = mkdtemp (dir);
   unix_path = g_build_filename (dir, "unix-socket", NULL);
   g_atexit (remove_unix_path);
   g_free (dir);
 
+  /* Create the unix socket, and listen for connection on it */
   socket = g_socket_new (G_SOCKET_FAMILY_UNIX, G_SOCKET_TYPE_STREAM,
       G_SOCKET_PROTOCOL_DEFAULT, &error);
   if (socket == NULL)
     goto OUT;
-
   socket_address = g_unix_socket_address_new (unix_path);
   if (!g_socket_bind (socket, socket_address, FALSE, &error))
     goto OUT;
+  if (!g_socket_listen (socket, &error))
+    goto OUT;
+  if (!g_socket_listener_add_socket (listener, socket, NULL, &error))
+    goto OUT;
+
+  g_socket_listener_accept_async (listener, NULL,
+    tube_socket_connected_cb, NULL);
 
   /* Offer the socket */
   address = tp_address_variant_from_g_socket_address (socket_address,
@@ -120,67 +218,14 @@ channel_prepare_cb (GObject *object,
   tp_g_value_slice_free (address);
   g_hash_table_unref (parameters);
 
-  /* Wait for the service side to connect on our socket */
-  listener = g_socket_listener_new ();
-  if (!g_socket_listen (socket, &error))
-    goto OUT;
-  if (!g_socket_listener_add_socket (listener, socket, NULL, &error))
-    goto OUT;
-  tube_connection = g_socket_listener_accept (listener, NULL, NULL, &error);
-  if (tube_connection == NULL)
-    goto OUT;
-
-  /* Create an IPv4 socket */
-  tp_clear_object (&socket);
-  socket = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_STREAM,
-      G_SOCKET_PROTOCOL_DEFAULT, &error);
-  if (socket == NULL)
-    goto OUT;
-  tp_clear_object (&socket_address);
-  inet_address = g_inet_address_new_loopback (G_SOCKET_FAMILY_IPV4);
-  socket_address = g_inet_socket_address_new (inet_address, 0);
-  if (!g_socket_bind (socket, socket_address, FALSE, &error))
-    goto OUT;
-
-  /* Get the port on which we got bound */
-  tp_clear_object (&socket_address);
-  socket_address = g_socket_get_local_address (socket, &error);
-  if (socket_address == NULL)
-    goto OUT;
-  port = g_inet_socket_address_get_port (G_INET_SOCKET_ADDRESS (socket_address));  
-
-  /* Start ssh client, it will connect on our IPv4 socket */
-  if (fork() == 0)
-    {
-      gchar *port_str;
-
-      port_str = g_strdup_printf ("%d", port);
-      execlp ("ssh", "ssh", "127.0.0.1", "-p", port_str, NULL);
-    }
-
-  /* Wait for the ssh client to connect on our socket */
-  if (!g_socket_listen (socket, &error))
-    goto OUT;
-  if (!g_socket_listener_add_socket (listener, socket, NULL, &error))
-    goto OUT;
-  ssh_connection = g_socket_listener_accept (listener, NULL, NULL, &error);
-  if (ssh_connection == NULL)
-    goto OUT;
-
-  /* Splice tube and ssh connections */
-  _g_io_stream_splice (G_IO_STREAM (tube_connection),
-      G_IO_STREAM (ssh_connection), splice_cb, NULL);
-
 OUT:
+
   if (error != NULL)
     throw_error (error);
 
-  tp_clear_object (&socket_address);
-  tp_clear_object (&inet_address);
-  tp_clear_object (&socket);
   tp_clear_object (&listener);
-  tp_clear_object (&tube_connection);
-  tp_clear_object (&ssh_connection);
+  tp_clear_object (&socket);
+  tp_clear_object (&socket_address);
   g_clear_error (&error);
 }
 
