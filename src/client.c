@@ -296,96 +296,14 @@ create_channel_cb (TpChannelDispatcher *dispatcher,
   g_object_unref (request);
 }
 
-typedef struct
-{
-  gchar *account_path;
-  gchar *contact_id;
-  TpBaseClient *client;
-} Context;
-
-static void
-account_manager_prepare_cb (GObject *object,
-    GAsyncResult *res,
-    gpointer user_data)
-{
-  TpAccountManager *account_manager = TP_ACCOUNT_MANAGER (object);
-  Context *ctx = user_data;
-  TpDBusDaemon *dbus;
-  TpChannelDispatcher *dispatcher;
-  GList *accounts, *l;
-  GHashTable *request;
-  gboolean found = FALSE;
-  GError *error = NULL;
-
-  if (!tp_account_manager_prepare_finish (account_manager, res, &error))
-    {
-      throw_error (error);
-      g_clear_error (&error);
-      return;
-    }
-
-  dbus = tp_dbus_daemon_dup (NULL);
-  dispatcher = tp_channel_dispatcher_new (dbus);
-  accounts = tp_account_manager_get_valid_accounts (account_manager);
-  
-  request = tp_asv_new (
-      TP_PROP_CHANNEL_CHANNEL_TYPE, G_TYPE_STRING,
-        TP_IFACE_CHANNEL_TYPE_STREAM_TUBE,
-      TP_PROP_CHANNEL_TARGET_HANDLE_TYPE, G_TYPE_UINT,
-        TP_HANDLE_TYPE_CONTACT,
-      TP_PROP_CHANNEL_TARGET_ID, G_TYPE_STRING,
-        ctx->contact_id,
-      TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE, G_TYPE_STRING, "ssh",
-      NULL);
-
-  for (l = accounts; l != NULL; l = l->next)
-    {
-      TpAccount *account = l->data;
-      TpConnectionStatus status;
-      const gchar *account_path;
-
-      status = tp_account_get_connection_status (account, NULL);
-      if (status != TP_CONNECTION_STATUS_CONNECTED)
-        continue;
-
-      account_path = tp_proxy_get_object_path (TP_PROXY (account));
-      if (tp_strdiff (account_path, ctx->account_path))
-        continue;
-
-      found = TRUE;
-      tp_cli_channel_dispatcher_call_create_channel (dispatcher, -1,
-          account_path, request, G_MAXINT64,
-          tp_base_client_get_bus_name (ctx->client), create_channel_cb,
-          NULL, NULL, NULL);
-
-      break;
-    }
-
-  if (!found)
-    {
-      g_debug ("Account not found or offline");
-      success = FALSE;
-      g_main_loop_quit (loop);
-    }
-
-  g_free (ctx->account_path);
-  g_free (ctx->contact_id);
-  g_object_unref (ctx->client);
-  g_slice_free (Context, ctx);
-
-  g_object_unref (dbus);
-  g_object_unref (dispatcher);
-  g_list_free (accounts);
-  g_hash_table_unref (request);
-}
-
 int
 main (gint argc, gchar *argv[])
 {
   TpDBusDaemon *dbus = NULL;
   TpBaseClient *client = NULL;
-  TpAccountManager *account_manager = NULL;
-  Context *ctx;
+  TpChannelDispatcher *dispatcher = NULL;
+  gchar *account_path = NULL;
+  GHashTable *request = NULL;
   GError *error = NULL;
 
   if (argc != 3)
@@ -415,15 +333,23 @@ main (gint argc, gchar *argv[])
   if (!tp_base_client_register (client, &error))
     goto OUT;
 
-  ctx = g_slice_new0 (Context);
-  ctx->account_path = g_strconcat (TP_ACCOUNT_OBJECT_PATH_BASE, argv[1], NULL);
-  ctx->contact_id = g_strdup (argv[2]);
-  ctx->client = g_object_ref (client);
+  /* Request the Channel */
+  dispatcher = tp_channel_dispatcher_new (dbus);
+  account_path = g_strconcat (TP_ACCOUNT_OBJECT_PATH_BASE, argv[1], NULL);
+  request = tp_asv_new (
+      TP_PROP_CHANNEL_CHANNEL_TYPE, G_TYPE_STRING,
+        TP_IFACE_CHANNEL_TYPE_STREAM_TUBE,
+      TP_PROP_CHANNEL_TARGET_HANDLE_TYPE, G_TYPE_UINT,
+        TP_HANDLE_TYPE_CONTACT,
+      TP_PROP_CHANNEL_TARGET_ID, G_TYPE_STRING,
+        argv[2],
+      TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE, G_TYPE_STRING, "ssh",
+      NULL);
 
-  /* Get the account manager to request a tube with a contact */
-  account_manager = tp_account_manager_dup ();
-  tp_account_manager_prepare_async (account_manager, NULL,
-      account_manager_prepare_cb, ctx);
+  tp_cli_channel_dispatcher_call_create_channel (dispatcher, -1,
+      account_path, request, G_MAXINT64,
+      tp_base_client_get_bus_name (client), create_channel_cb,
+      NULL, NULL, NULL);
 
   loop = g_main_loop_new (NULL, FALSE);
   g_main_loop_run (loop);
@@ -439,7 +365,9 @@ OUT:
   tp_clear_pointer (&loop, g_main_loop_unref);
   tp_clear_object (&dbus);
   tp_clear_object (&client);
-  tp_clear_object (&account_manager);
+  tp_clear_object (&dispatcher);
+  g_free (account_path);
+  tp_clear_pointer (&request, g_hash_table_unref);
   g_clear_error (&error);
 
   return success ? EXIT_SUCCESS : EXIT_FAILURE;
