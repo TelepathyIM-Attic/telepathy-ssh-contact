@@ -33,4 +33,4 @@ stamp-h1
 
 src/telepathy-ssh-client
 src/telepathy-ssh-service
-
+src/org.freedesktop.Telepathy.Client.TelepathySSH.service
