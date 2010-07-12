@@ -24,7 +24,8 @@
 
 G_BEGIN_DECLS
 
-typedef void (*_GIOStreamSpliceCallback) (gpointer user_data);
+typedef void (*_GIOStreamSpliceCallback) (GIOStream *stream1,
+    GIOStream *stream2, const GError *error, gpointer user_data);
 
 void _g_io_stream_splice (GIOStream *stream1, GIOStream *stream2,
     _GIOStreamSpliceCallback callback, gpointer user_data);

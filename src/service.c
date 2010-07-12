@@ -39,9 +39,14 @@ throw_error (const GError *error)
 }
 
 static void
-splice_cb (gpointer user_data)
+splice_cb (GIOStream *stream1,
+    GIOStream *stream2,
+    const GError *error,
+    gpointer user_data)
 {
-  if (--n_sessions == 0)
+  if (error != NULL)
+    throw_error (error);
+  else if (--n_sessions == 0)
     g_main_loop_quit (loop);
 }
 
