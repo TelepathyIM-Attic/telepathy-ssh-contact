@@ -186,7 +186,7 @@ main (gint argc, gchar *argv[])
   if (dbus == NULL)
     goto OUT;
 
-  client = tp_simple_handler_new (dbus, FALSE, FALSE, "TelepathySSHService",
+  client = tp_simple_handler_new (dbus, FALSE, FALSE, "TelepathySSH",
       FALSE, got_channel_cb, NULL, NULL);
 
   tp_base_client_take_handler_filter (client, tp_asv_new (
@@ -197,10 +197,6 @@ main (gint argc, gchar *argv[])
       NULL));
 
   if (!tp_base_client_register (client, &error))
-    goto OUT;
-
-  if (!tp_dbus_daemon_request_name (dbus,
-      "org.freedesktop.Telepathy.Client.TelepathySSH", TRUE, &error))
     goto OUT;
 
   loop = g_main_loop_new (NULL, FALSE);
