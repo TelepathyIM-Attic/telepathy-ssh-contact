@@ -3,8 +3,9 @@ AM_CPPFLAGS = \
 	-DPACKAGE_SRC_DIR=\""$(srcdir)"\" \
 	-DPACKAGE_DATA_DIR=\""$(datadir)"\" \
 	$(TELEPATHY_SSH_CFLAGS)
-AM_CFLAGS = -Wall -g
-AM_LDFLAGS = -Wl,--export-dynamic
+
+AM_CFLAGS = -Wall -g -Werror
+
 LDADD = $(TELEPATHY_SSH_LIBS)
 
 bin_PROGRAMS = telepathy-ssh-client telepathy-ssh-service
