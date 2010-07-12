@@ -114,36 +114,6 @@ OUT:
 }
 
 static void
-channel_prepare_cb (GObject *object,
-    GAsyncResult *res,
-    gpointer user_data)
-{
-  TpChannel *channel = TP_CHANNEL (object);
-  GHashTable *parameters;
-  GValue value = { 0, };
-  GError *error = NULL;
-
-  if (!tp_proxy_prepare_finish (TP_PROXY (channel), res, &error))
-    {
-      throw_error (error);
-      g_clear_error (&error);
-      return;
-    }
-
-  /* FIXME: Those are dummy values, tp-glib crash if NULL is passed */
-  parameters = g_hash_table_new (NULL, NULL);
-  g_value_init (&value, G_TYPE_STRING);
-
-  tp_cli_channel_type_stream_tube_call_accept (channel, -1,
-      TP_SOCKET_ADDRESS_TYPE_UNIX,
-      TP_SOCKET_ACCESS_CONTROL_LOCALHOST, &value,
-      accept_tube_cb, NULL, NULL, NULL);
-
-  g_hash_table_unref (parameters);
-  g_value_reset (&value);
-}
-
-static void
 got_channel_cb (TpSimpleHandler *handler,
     TpAccount *account,
     TpConnection *connection,
@@ -153,7 +123,11 @@ got_channel_cb (TpSimpleHandler *handler,
     TpHandleChannelsContext *context,
     gpointer user_data)
 {
+  GValue value = { 0, };
   GList *l;
+
+  /* FIXME: Dummy value because passing NULL makes tp-glib crash */
+  g_value_init (&value, G_TYPE_STRING);
 
   for (l = channels; l != NULL; l = l->next)
     {
@@ -165,11 +139,15 @@ got_channel_cb (TpSimpleHandler *handler,
 
       n_sessions++;
 
-      tp_proxy_prepare_async (TP_PROXY (channel), NULL,
-          channel_prepare_cb, NULL);
-    }
+      tp_cli_channel_type_stream_tube_call_accept (channel, -1,
+          TP_SOCKET_ADDRESS_TYPE_UNIX,
+          TP_SOCKET_ACCESS_CONTROL_LOCALHOST, &value,
+          accept_tube_cb, NULL, NULL, NULL);
 
+    }
   tp_handle_channels_context_accept (context);
+
+  g_value_reset (&value);
 }
 
 int

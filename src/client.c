@@ -159,11 +159,8 @@ offer_tube_cb (TpChannel *channel,
 }
 
 static void
-channel_prepare_cb (GObject *object,
-    GAsyncResult *res,
-    gpointer user_data)
+handle_channel (TpChannel *channel)
 {
-  TpChannel *channel = TP_CHANNEL (object);
   gchar *dir;
   GSocketListener *listener = NULL;
   GSocket *socket = NULL;
@@ -171,9 +168,6 @@ channel_prepare_cb (GObject *object,
   GValue *address;
   GHashTable *parameters;
   GError *error = NULL;
-
-  if (!tp_proxy_prepare_finish (TP_PROXY (channel), res, &error))
-    goto OUT;
 
   /* We are client side, but we have to offer a socket... So we offer an unix
    * socket on which the service side can connect. We also create an IPv4 socket
@@ -249,8 +243,7 @@ got_channel_cb (TpSimpleHandler *handler,
           TP_IFACE_CHANNEL_TYPE_STREAM_TUBE))
         continue;
 
-      tp_proxy_prepare_async (TP_PROXY (channel), NULL,
-          channel_prepare_cb, NULL);
+      handle_channel (channel);
     }
 
   tp_handle_channels_context_accept (context);
