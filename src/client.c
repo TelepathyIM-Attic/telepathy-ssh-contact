@@ -267,6 +267,7 @@ create_channel_cb (TpChannelDispatcher *dispatcher,
     gpointer user_data,
     GObject *weak_object)
 {
+  TpDBusDaemon *dbus;
   TpChannelRequest *request;
   GError *err = NULL;
 
@@ -276,8 +277,8 @@ create_channel_cb (TpChannelDispatcher *dispatcher,
       return;
     }
 
-  request = tp_channel_request_new (tp_proxy_get_dbus_daemon (TP_PROXY (dispatcher)),
-      request_path, NULL, &err);
+  dbus = tp_proxy_get_dbus_daemon (TP_PROXY (dispatcher));
+  request = tp_channel_request_new (dbus, request_path, NULL, &err);
   if (request == NULL)
     {
       throw_error (err);
@@ -290,10 +291,20 @@ create_channel_cb (TpChannelDispatcher *dispatcher,
   g_object_unref (request);
 }
 
+typedef struct
+{
+  TpBaseClient *client;
+  gchar *account_id;
+  gchar *contact_id;
+
+  GList *accounts;
+  guint n_readying_connections;
+
+  TpAccount *account;
+} RequestData;
+
 static void
-request_channel (TpBaseClient *client,
-    const gchar *account_path,
-    const gchar *contact_id)
+request_channel (RequestData *data)
 {
   TpDBusDaemon *dbus = NULL;
   TpChannelDispatcher *dispatcher = NULL;
@@ -307,13 +318,13 @@ request_channel (TpBaseClient *client,
       TP_PROP_CHANNEL_TARGET_HANDLE_TYPE, G_TYPE_UINT,
         TP_HANDLE_TYPE_CONTACT,
       TP_PROP_CHANNEL_TARGET_ID, G_TYPE_STRING,
-        contact_id,
+        data->contact_id,
       TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE, G_TYPE_STRING, "ssh",
       NULL);
 
   tp_cli_channel_dispatcher_call_create_channel (dispatcher, -1,
-      account_path, request, G_MAXINT64,
-      tp_base_client_get_bus_name (client), create_channel_cb,
+      tp_proxy_get_object_path (TP_PROXY (data->account)), request, G_MAXINT64,
+      tp_base_client_get_bus_name (data->client), create_channel_cb,
       NULL, NULL, NULL);
 
   g_object_unref (dbus);
@@ -321,11 +332,143 @@ request_channel (TpBaseClient *client,
   g_hash_table_unref (request);
 }
 
-typedef struct
+static void
+chooser_contact (RequestData *data)
 {
-  TpBaseClient *client;
-  gchar *contact_id;
-} PrepareAccountManagerData;
+  if (data->contact_id == NULL)
+    {
+      gchar buffer[256];
+      gchar *str;
+
+      /* FIXME: Lists the contacts of the picked account */
+      g_print ("Which contact ID to use? ");
+      str = fgets (buffer, sizeof (buffer), stdin);
+      if (str != NULL)
+        {
+          str[strlen (str) - 1] = '\0';
+          data->contact_id = g_strdup (str);
+        }
+    }
+
+  request_channel (data);
+}
+
+static void
+chooser_account (RequestData *data)
+{
+  if (data->accounts == NULL)
+    {
+      g_print ("No suitable account, abort\n");
+      g_main_loop_quit (loop);
+      return;
+    }
+
+  /* If there is only one suitable account, use it. Otherwise, ask the user to
+   * pick one. */
+  if (data->accounts->next == NULL)
+    {
+      data->account = g_object_ref (data->accounts->data);
+    }
+  else
+    {
+      GList *l;
+      guint count = 0;
+      gchar buffer[10];
+      gchar *str;
+
+      for (l = data->accounts; l != NULL; l = l->next)
+        {
+          g_print ("%d) %s (%s)\n", ++count,
+              tp_account_get_display_name (l->data),
+              tp_account_get_protocol (l->data));
+        }
+
+      g_print ("Which account to use? ");
+      str = fgets (buffer, sizeof (buffer), stdin);
+      if (str != NULL)
+        {
+          str[strlen (str) - 1] = '\0';
+          l = g_list_nth (data->accounts, atoi (str) - 1);
+        }
+      if (l == NULL)
+        {
+          g_print ("Invalid account number\n");
+          g_main_loop_quit (loop);
+          return;
+        }
+      data->account = g_object_ref (l->data);
+    }
+
+  g_assert (data->account != NULL);
+
+  /* If the account id was not in the options, print it now. It makes easier to
+  * copy/paste later. */
+  if (data->account_id == NULL)
+    {
+      const gchar *account_path;
+
+      account_path = tp_proxy_get_object_path (data->account);
+      data->account_id = g_strdup (account_path +
+          strlen (TP_ACCOUNT_OBJECT_PATH_BASE));
+
+      g_print ("Going to use account: '%s'\n", data->account_id);
+    }
+
+  chooser_contact (data);
+}
+
+static void
+connection_prepare_cb (GObject *object,
+    GAsyncResult *res,
+    gpointer user_data)
+{
+  TpConnection *connection = TP_CONNECTION (object);
+  RequestData *data = user_data;
+  gboolean suitable = FALSE;
+
+  if (tp_proxy_prepare_finish (TP_PROXY (connection), res, NULL))
+    {
+      TpCapabilities *caps;
+      GPtrArray *classes;
+      guint i;
+
+      /* Verify if that connection is suitable */
+      caps = tp_connection_get_capabilities (connection);
+      classes = tp_capabilities_get_channel_classes (caps);
+      for (i = 0; i < classes->len; i++)
+        {
+          GValueArray *arr = g_ptr_array_index (classes, i);
+          GHashTable *fixed;
+          const gchar *chan_type;
+
+          fixed = g_value_get_boxed (g_value_array_get_nth (arr, 0));
+          chan_type = tp_asv_get_string (fixed, TP_PROP_CHANNEL_CHANNEL_TYPE);
+
+          if (!tp_strdiff (chan_type, TP_IFACE_CHANNEL_TYPE_STREAM_TUBE))
+            {
+              suitable = TRUE;
+              break;
+            }
+        }
+    }
+
+  if (!suitable)
+    {
+      GList *l;
+
+      /* Remove the account that has that connection from the list */
+      for (l = data->accounts; l != NULL; l = l->next)
+        if (tp_account_get_connection (l->data) == connection)
+          {
+            g_object_unref (l->data);
+            data->accounts = g_list_delete_link (data->accounts, l);
+            break;
+          }
+    }
+
+  if (--data->n_readying_connections == 0)
+    chooser_account (data);
+}
 
 static void
 account_manager_prepare_cb (GObject *object,
@@ -333,115 +476,166 @@ account_manager_prepare_cb (GObject *object,
     gpointer user_data)
 {
   TpAccountManager *manager = TP_ACCOUNT_MANAGER (object);
-  PrepareAccountManagerData *data = user_data;
-  GList *accounts, *l, *next;
-  guint count = 0;
-  gchar buffer[50];
-  gchar *str;
+  RequestData *data = user_data;
+  GList *l, *next;
+  GError *error = NULL;
 
-  accounts = tp_account_manager_get_valid_accounts (manager);
-  for (l = accounts; l != NULL; l = next)
+  if (!tp_proxy_prepare_finish (TP_PROXY (manager), res, &error))
     {
+      throw_error (error);
+      g_clear_error (&error);
+      return;
+    }
+
+  /* We want to list all accounts which has a connection that have StreamTube
+   * support. So first we prepare all connections, and we keep in
+   * data->accounts those that are suitable. */
+
+  data->accounts = tp_account_manager_get_valid_accounts (manager);
+  g_list_foreach (data->accounts, (GFunc) g_object_ref, NULL);
+
+  for (l = data->accounts; l != NULL; l = next)
+    {
+      GQuark features[] = { TP_CONNECTION_FEATURE_CAPABILITIES, 0 };
       TpAccount *account = l->data;
-      TpConnectionStatus status;
+      TpConnection *connection;
 
       next = l->next;
 
-      status = tp_account_get_connection_status (account, NULL);
-      if (status != TP_CONNECTION_STATUS_CONNECTED)
+      connection = tp_account_get_connection (account);
+      if (connection == NULL)
         {
-          accounts = g_list_delete_link (accounts, l);
+          g_object_unref (account);
+          data->accounts = g_list_delete_link (data->accounts, l);
           continue;
         }
 
-      /* FIXME: Add a check if that account supports Tubes */
-
-      g_print ("%d) %s (%s)\n", ++count,
-          tp_account_get_display_name (account),
-          tp_account_get_protocol (account));
+      data->n_readying_connections++;
+      tp_proxy_prepare_async (TP_PROXY (connection), features,
+          connection_prepare_cb, data);
     }
 
-  do
+  if (data->n_readying_connections == 0)
+    chooser_account (data);
+}
+
+static void
+account_prepare_cb (GObject *object,
+    GAsyncResult *res,
+    gpointer user_data)
+{
+  TpAccount *account = TP_ACCOUNT (object);
+  RequestData *data = user_data;
+  GQuark features[] = { TP_CONNECTION_FEATURE_CAPABILITIES, 0 };
+  TpConnection *connection;
+  GError *error = NULL;
+
+  /* We are in the case where an account was specified in options, so we have
+   * only one candidate, if that accounts has no connection or the connection
+   * has no StreamTube support, we'll fail. */
+
+  if (!tp_proxy_prepare_finish (TP_PROXY (account), res, &error))
     {
-      g_print ("Which account to use? ");
-      str = fgets (buffer, sizeof (buffer), stdin);
-      if (str == NULL)
-        {
-          g_print ("Error reading stdin\n");
-          continue;
-        }
-
-      str[strlen (str) - 1] = '\0';
-      l = g_list_nth (accounts, atoi (str) - 1);
-      if (l == NULL)
-        g_print ("Invalid account number\n");
+      throw_error (error);
+      return;
     }
-  while (l == NULL);
 
-  request_channel (data->client, tp_proxy_get_object_path (l->data),
-      data->contact_id);
+  connection = tp_account_get_connection (account);
+  if (connection == NULL)
+    {
+      g_debug ("Account not online");
+      g_main_loop_quit (loop);
+      return;
+    }
 
-  g_list_free (accounts);
-  g_object_unref (data->client);
-  g_free (data->contact_id);
-  g_slice_free (PrepareAccountManagerData, data);
+  /* Prepare account's connection with caps feature */
+  data->accounts = g_list_prepend (NULL, g_object_ref (account));
+  data->n_readying_connections = 1;
+  tp_proxy_prepare_async (TP_PROXY (connection), features,
+      connection_prepare_cb, data);
 }
 
 int
 main (gint argc, gchar *argv[])
 {
   TpDBusDaemon *dbus = NULL;
-  TpBaseClient *client = NULL;
-  gchar *account_path = NULL;
   GError *error = NULL;
+  RequestData data = { 0, };
+  GOptionContext *optcontext;
+  GOptionEntry options[] = {
+      { "account", 'a',
+        0, G_OPTION_ARG_STRING, &data.account_id,
+        "The account ID",
+        NULL },
+      { "contact", 'c',
+        0, G_OPTION_ARG_STRING, &data.contact_id,
+        "The contact ID",
+        NULL },
+      { NULL }
+  };
 
   g_type_init ();
 
-  if (argc < 2 || argc > 3)
+  optcontext = g_option_context_new ("- Telepaty-ssh");
+  g_option_context_add_main_entries (optcontext, options, NULL);
+  if (!g_option_context_parse (optcontext, &argc, &argv, &error))
     {
-      g_print ("Usage: %s [<account id>] <contact id>\n", argv[0]);
-      success = FALSE;
-      goto OUT;
+      g_print ("%s\nRun '%s --help' to see a full list of available command "
+          "line options.\n", error->message, argv[0]);
+      return EXIT_FAILURE;
     }
+  g_option_context_free (optcontext);
+
+  g_set_application_name (PACKAGE_NAME);
 
   /* Register an handler for the StreamTube channel we'll request */
   dbus = tp_dbus_daemon_dup (&error);
   if (dbus == NULL)
     goto OUT;
 
-  client = tp_simple_handler_new (dbus, FALSE, FALSE, "TelepathySSHClient",
+  data.client = tp_simple_handler_new (dbus, FALSE, FALSE, "TelepathySSHClient",
       TRUE, got_channel_cb, NULL, NULL);
 
-  tp_base_client_take_handler_filter (client, tp_asv_new (
-      TP_PROP_CHANNEL_CHANNEL_TYPE, G_TYPE_STRING, TP_IFACE_CHANNEL_TYPE_STREAM_TUBE,
-      TP_PROP_CHANNEL_TARGET_HANDLE_TYPE, G_TYPE_UINT, TP_HANDLE_TYPE_CONTACT,
-      TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE, G_TYPE_STRING, "ssh",
-      TP_PROP_CHANNEL_REQUESTED, G_TYPE_BOOLEAN, TRUE,
+  tp_base_client_take_handler_filter (data.client, tp_asv_new (
+      TP_PROP_CHANNEL_CHANNEL_TYPE, G_TYPE_STRING,
+        TP_IFACE_CHANNEL_TYPE_STREAM_TUBE,
+      TP_PROP_CHANNEL_TARGET_HANDLE_TYPE, G_TYPE_UINT,
+        TP_HANDLE_TYPE_CONTACT,
+      TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE, G_TYPE_STRING,
+        "ssh",
+      TP_PROP_CHANNEL_REQUESTED, G_TYPE_BOOLEAN,
+        TRUE,
       NULL));
 
-  if (!tp_base_client_register (client, &error))
+  if (!tp_base_client_register (data.client, &error))
     goto OUT;
 
-  if (argc == 3)
+  /* If an account id was specified in options, then prepare it, otherwise
+   * we get the account manager to get a list of all accounts */
+  if (data.account_id != NULL)
     {
       gchar *account_path;
 
-      account_path = g_strconcat (TP_ACCOUNT_OBJECT_PATH_BASE, argv[1], NULL);
-      request_channel (client, account_path, argv[2]);
+      account_path = g_strconcat (TP_ACCOUNT_OBJECT_PATH_BASE, data.account_id,
+          NULL);
+      data.account = tp_account_new (dbus, account_path, &error);
+      if (data.account == NULL)
+        goto OUT;
+
+      tp_proxy_prepare_async (TP_PROXY (data.account), NULL,
+          account_prepare_cb, &data);
+
       g_free (account_path);
     }
   else
     {
-      PrepareAccountManagerData *data;
       TpAccountManager *manager;
-
-      data = g_slice_new0 (PrepareAccountManagerData);
-      data->client = g_object_ref (client);
-      data->contact_id = g_strdup (argv[1]);
 
       manager = tp_account_manager_new (dbus);
       tp_proxy_prepare_async (TP_PROXY (manager), NULL,
-          account_manager_prepare_cb, data);
+          account_manager_prepare_cb, &data);
+
+      g_object_unref (manager);
     }
 
   loop = g_main_loop_new (NULL, FALSE);
@@ -457,9 +651,14 @@ OUT:
 
   tp_clear_pointer (&loop, g_main_loop_unref);
   tp_clear_object (&dbus);
-  tp_clear_object (&client);
-  g_free (account_path);
   g_clear_error (&error);
+
+  tp_clear_object (&data.client);
+  g_free (data.account_id);
+  g_free (data.contact_id);
+  g_list_foreach (data.accounts, (GFunc) g_object_unref, NULL);
+  g_list_free (data.accounts);
+  tp_clear_object (&data.account);
 
   return success ? EXIT_SUCCESS : EXIT_FAILURE;
 }
