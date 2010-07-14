@@ -251,6 +251,22 @@ got_channel_cb (TpSimpleHandler *handler,
 }
 
 static void
+channel_request_invalidated (TpProxy *proxy,
+    guint domain,
+    gint code,
+    gchar *message,
+    gpointer user_data)
+{
+  const GError *error;
+
+  error = tp_proxy_get_invalidated (proxy);
+  if (!g_error_matches (error, TP_DBUS_ERRORS, TP_DBUS_ERROR_OBJECT_REMOVED))
+    throw_error (error);
+
+  g_object_unref (proxy);
+}
+
+static void
 request_proceed_cb (TpChannelRequest *request,
     const GError *error,
     gpointer user_data,
@@ -286,9 +302,11 @@ create_channel_cb (TpChannelDispatcher *dispatcher,
       return;
     }
 
+  g_signal_connect (request, "invalidated",
+      G_CALLBACK (channel_request_invalidated), NULL);
+
   tp_cli_channel_request_call_proceed (request, -1, request_proceed_cb,
       NULL, NULL, NULL);
-  g_object_unref (request);
 }
 
 typedef struct
