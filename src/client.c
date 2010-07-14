@@ -355,7 +355,8 @@ request_channel (RequestData *data)
         TP_HANDLE_TYPE_CONTACT,
       TP_PROP_CHANNEL_TARGET_ID, G_TYPE_STRING,
         data->contact_id,
-      TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE, G_TYPE_STRING, "ssh",
+      TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE, G_TYPE_STRING,
+        "reverse-ssh",
       NULL);
 
   tp_cli_channel_dispatcher_call_create_channel (dispatcher, -1,
