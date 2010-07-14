@@ -153,10 +153,21 @@ offer_tube_cb (TpChannel *channel,
     gpointer user_data,
     GObject *weak_object)
 {
-  /* FIXME: If the offer failed, do we have to cancel the pending
-   * g_socket_listener_accept_async() ? */
   if (error != NULL)
     throw_error (error);
+}
+
+static void
+channel_invalidated_cb (TpProxy *proxy,
+    guint domain,
+    gint code,
+    gchar *message,
+    gpointer user_data)
+{
+  const GError *error;
+
+  error = tp_proxy_get_invalidated (proxy);
+  throw_error (error);
 }
 
 static void
@@ -170,10 +181,16 @@ handle_channel (TpChannel *channel)
   GHashTable *parameters;
   GError *error = NULL;
 
+  g_signal_connect (channel, "invalidated",
+      G_CALLBACK (channel_invalidated_cb), NULL);
+
   /* We are client side, but we have to offer a socket... So we offer an unix
    * socket on which the service side can connect. We also create an IPv4 socket
    * on which the ssh client can connect. When both sockets are connected,
    * we can forward all communications between them. */
+
+  /* FIXME: I don't think we close socket connections, or cancel
+   * g_socket_listener_accept_async in all error cases... */
 
   listener = g_socket_listener_new ();
 
