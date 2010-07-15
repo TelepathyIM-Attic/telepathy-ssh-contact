@@ -356,7 +356,7 @@ request_channel (RequestData *data)
       TP_PROP_CHANNEL_TARGET_ID, G_TYPE_STRING,
         data->contact_id,
       TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE, G_TYPE_STRING,
-        "reverse-ssh",
+        TUBE_SERVICE,
       NULL);
 
   tp_cli_channel_dispatcher_call_create_channel (dispatcher, -1,
@@ -369,30 +369,201 @@ request_channel (RequestData *data)
   g_hash_table_unref (request);
 }
 
+static gboolean
+has_stream_tube_cap (TpCapabilities *caps)
+{
+  GPtrArray *classes;
+  guint i;
+
+  if (caps == NULL)
+    return FALSE;
+
+  classes = tp_capabilities_get_channel_classes (caps);
+  for (i = 0; i < classes->len; i++)
+    {
+      GValueArray *arr = g_ptr_array_index (classes, i);
+      GHashTable *fixed;
+      const gchar *chan_type;
+      const gchar *service;
+
+      fixed = g_value_get_boxed (g_value_array_get_nth (arr, 0));
+      chan_type = tp_asv_get_string (fixed, TP_PROP_CHANNEL_CHANNEL_TYPE);
+      service = tp_asv_get_string (fixed, TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE);
+
+      if (!tp_strdiff (chan_type, TP_IFACE_CHANNEL_TYPE_STREAM_TUBE) &&
+          (!tp_capabilities_is_specific_to_contact (caps) ||
+           !tp_strdiff (service, TUBE_SERVICE)))
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
+static void
+got_contacts_cb (TpConnection *connection,
+    guint n_contacts,
+    TpContact * const *contacts,
+    guint n_failed,
+    const TpHandle *failed,
+    const GError *error,
+    gpointer user_data,
+    GObject *weak_object)
+{
+  RequestData *data = user_data;
+  guint i;
+  GList *candidates = NULL, *l;
+  guint count = 0;
+  gchar buffer[10];
+  gchar *str;
+
+  if (error != NULL)
+    {
+      throw_error (error);
+      return;
+    }
+
+  /* Build a list of all contacts supporting StreamTube */
+  for (i = 0; i < n_contacts; i++)
+    if (has_stream_tube_cap (tp_contact_get_capabilities (contacts[i])))
+      candidates = g_list_prepend (candidates, contacts[i]);
+
+  if (candidates == NULL)
+    {
+      g_print ("No suitable contact, abort\n");
+      g_main_loop_quit (loop);
+      return;
+    }
+
+  /* Ask the user which candidate to use */
+  for (l = candidates; l != NULL; l = l->next)
+    {
+      TpContact *contact = l->data;
+
+      g_print ("%d) %s (%s)\n", ++count, tp_contact_get_alias (contact),
+          tp_contact_get_identifier (contact));
+    }
+
+  g_print ("Which contact to use? ");
+  str = fgets (buffer, sizeof (buffer), stdin);
+  if (str != NULL)
+    {
+      str[strlen (str) - 1] = '\0';
+      l = g_list_nth (candidates, atoi (str) - 1);
+    }
+  if (l == NULL)
+    {
+      g_print ("Invalid contact number\n");
+      g_main_loop_quit (loop);
+      return;
+    }
+
+  data->contact_id = g_strdup (tp_contact_get_identifier (l->data));
+  request_channel (data);
+
+  g_list_free (candidates);
+}
+
+static void
+stored_channel_prepare_cb (GObject *object,
+    GAsyncResult *res,
+    gpointer user_data)
+{
+  TpChannel *channel = TP_CHANNEL (object);
+  TpConnection *connection;
+  TpContactFeature features[] = { TP_CONTACT_FEATURE_ALIAS,
+      TP_CONTACT_FEATURE_CAPABILITIES };
+  const TpIntSet *set;
+  GArray *handles;
+  GError *error = NULL;
+
+  if (!tp_proxy_prepare_finish (channel, res, &error))
+    {
+      throw_error (error);
+      g_clear_error (&error);
+      return;
+    }
+
+  connection = tp_channel_borrow_connection (channel);
+  set = tp_channel_group_get_members (channel);
+  handles = tp_intset_to_array (set);
+
+  tp_connection_get_contacts_by_handle (connection, handles->len,
+      (TpHandle *) handles->data, G_N_ELEMENTS (features), features,
+      got_contacts_cb, user_data, NULL, NULL);
+
+  g_array_unref (handles);
+}
+
+static void
+ensure_stored_channel_cb (TpConnection *connection,
+    gboolean yours,
+    const gchar *channel_path,
+    GHashTable *properties,
+    const GError *error,
+    gpointer user_data,
+    GObject *weak_object)
+{
+  TpChannel *channel;
+  GQuark features[] = { TP_CHANNEL_FEATURE_GROUP, 0 };
+  GError *err = NULL;
+
+  if (error != NULL)
+    {
+      throw_error (error);
+      return;
+    }
+
+  channel = tp_channel_new_from_properties (connection, channel_path,
+      properties, &err);
+  if (channel == NULL)
+    {
+      throw_error (err);
+      g_clear_error (&err);
+      return;
+    }
+
+  tp_proxy_prepare_async (TP_PROXY (channel), features,
+      stored_channel_prepare_cb, user_data);
+
+  g_object_unref (channel);
+}
+
 static void
 chooser_contact (RequestData *data)
 {
-  if (data->contact_id == NULL)
-    {
-      gchar buffer[256];
-      gchar *str;
+  TpConnection *connection;
+  GHashTable *request;
 
-      /* FIXME: Lists the contacts of the picked account */
-      g_print ("Which contact ID to use? ");
-      str = fgets (buffer, sizeof (buffer), stdin);
-      if (str != NULL)
-        {
-          str[strlen (str) - 1] = '\0';
-          data->contact_id = g_strdup (str);
-        }
-    }
+  /* If a contact ID was passed in the options, use it */
+  if (data->contact_id != NULL)
+    request_channel (data);
 
-  request_channel (data);
+  /* Otherwise, we'll get TpContact objects for all stored contacts on that
+   * account. */
+  request = tp_asv_new (
+      TP_PROP_CHANNEL_CHANNEL_TYPE, G_TYPE_STRING,
+        TP_IFACE_CHANNEL_TYPE_CONTACT_LIST,
+      TP_PROP_CHANNEL_TARGET_HANDLE_TYPE, G_TYPE_UINT,
+        TP_HANDLE_TYPE_LIST,
+      TP_PROP_CHANNEL_TARGET_ID, G_TYPE_STRING,
+        "stored",
+      NULL);
+
+  connection = tp_account_get_connection (data->account);
+  tp_cli_connection_interface_requests_call_ensure_channel (connection, -1,
+      request, ensure_stored_channel_cb, data, NULL, NULL);
+
+  g_hash_table_unref (request);
 }
 
 static void
 chooser_account (RequestData *data)
 {
+  GList *l;
+  guint count = 0;
+  gchar buffer[10];
+  gchar *str;
+
   if (data->accounts == NULL)
     {
       g_print ("No suitable account, abort\n");
@@ -400,43 +571,27 @@ chooser_account (RequestData *data)
       return;
     }
 
-  /* If there is only one suitable account, use it. Otherwise, ask the user to
-   * pick one. */
-  if (data->accounts->next == NULL)
+  for (l = data->accounts; l != NULL; l = l->next)
     {
-      data->account = g_object_ref (data->accounts->data);
-    }
-  else
-    {
-      GList *l;
-      guint count = 0;
-      gchar buffer[10];
-      gchar *str;
-
-      for (l = data->accounts; l != NULL; l = l->next)
-        {
-          g_print ("%d) %s (%s)\n", ++count,
-              tp_account_get_display_name (l->data),
-              tp_account_get_protocol (l->data));
-        }
-
-      g_print ("Which account to use? ");
-      str = fgets (buffer, sizeof (buffer), stdin);
-      if (str != NULL)
-        {
-          str[strlen (str) - 1] = '\0';
-          l = g_list_nth (data->accounts, atoi (str) - 1);
-        }
-      if (l == NULL)
-        {
-          g_print ("Invalid account number\n");
-          g_main_loop_quit (loop);
-          return;
-        }
-      data->account = g_object_ref (l->data);
+      g_print ("%d) %s (%s)\n", ++count,
+          tp_account_get_display_name (l->data),
+          tp_account_get_protocol (l->data));
     }
 
-  g_assert (data->account != NULL);
+  g_print ("Which account to use? ");
+  str = fgets (buffer, sizeof (buffer), stdin);
+  if (str != NULL)
+    {
+      str[strlen (str) - 1] = '\0';
+      l = g_list_nth (data->accounts, atoi (str) - 1);
+    }
+  if (l == NULL)
+    {
+      g_print ("Invalid account number\n");
+      g_main_loop_quit (loop);
+      return;
+    }
+  data->account = g_object_ref (l->data);
 
   /* If the account id was not in the options, print it now. It makes easier to
   * copy/paste later. */
@@ -461,35 +616,9 @@ connection_prepare_cb (GObject *object,
 {
   TpConnection *connection = TP_CONNECTION (object);
   RequestData *data = user_data;
-  gboolean suitable = FALSE;
 
-  if (tp_proxy_prepare_finish (TP_PROXY (connection), res, NULL))
-    {
-      TpCapabilities *caps;
-      GPtrArray *classes;
-      guint i;
-
-      /* Verify if that connection is suitable */
-      caps = tp_connection_get_capabilities (connection);
-      classes = tp_capabilities_get_channel_classes (caps);
-      for (i = 0; i < classes->len; i++)
-        {
-          GValueArray *arr = g_ptr_array_index (classes, i);
-          GHashTable *fixed;
-          const gchar *chan_type;
-
-          fixed = g_value_get_boxed (g_value_array_get_nth (arr, 0));
-          chan_type = tp_asv_get_string (fixed, TP_PROP_CHANNEL_CHANNEL_TYPE);
-
-          if (!tp_strdiff (chan_type, TP_IFACE_CHANNEL_TYPE_STREAM_TUBE))
-            {
-              suitable = TRUE;
-              break;
-            }
-        }
-    }
-
-  if (!suitable)
+  if (!tp_proxy_prepare_finish (TP_PROXY (connection), res, NULL) ||
+      !has_stream_tube_cap (tp_connection_get_capabilities (connection)))
     {
       GList *l;
 

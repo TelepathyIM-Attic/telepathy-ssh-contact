@@ -174,7 +174,7 @@ main (gint argc, gchar *argv[])
       TP_PROP_CHANNEL_TARGET_HANDLE_TYPE, G_TYPE_UINT,
         TP_HANDLE_TYPE_CONTACT,
       TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE, G_TYPE_STRING,
-        "reverse-ssh",
+        TUBE_SERVICE,
       TP_PROP_CHANNEL_REQUESTED, G_TYPE_BOOLEAN,
         FALSE,
       NULL));

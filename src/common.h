@@ -23,6 +23,8 @@
 
 #include <gio/gio.h>
 
+#define TUBE_SERVICE "reverse-ssh"
+
 G_BEGIN_DECLS
 
 typedef void (*_GIOStreamSpliceCallback) (GIOStream *stream1,
