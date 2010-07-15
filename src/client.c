@@ -106,6 +106,54 @@ ssh_socket_connected_cb (GObject *source_object,
 }
 
 static void
+exec_ssh_on_socket (ClientContext *context,
+    GSocket *socket)
+{
+  GSocketAddress *socket_address;
+  GInetAddress *inet_address;
+  GError *error = NULL;
+  guint16 port;
+  gchar *host;
+
+  /* Get the port on which we got bound */
+  socket_address = g_socket_get_local_address (socket, &error);
+  if (socket_address == NULL)
+    {
+      throw_error (context, error);
+      return;
+    }
+
+  inet_address = g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (socket_address));
+  port = g_inet_socket_address_get_port (G_INET_SOCKET_ADDRESS (socket_address));
+  host = g_inet_address_to_string (inet_address);
+
+  if (fork() == 0)
+    {
+      GPtrArray *args;
+      gchar *str;
+
+      args = g_ptr_array_new ();
+      g_ptr_array_add (args, "ssh");
+      g_ptr_array_add (args, host);
+
+      str = g_strdup_printf ("-p %d", port);
+      g_ptr_array_add (args, str);
+
+      if (context->login != NULL)
+        {
+          str = g_strdup_printf ("-l %s", context->login);
+          g_ptr_array_add (args, str);
+        }
+
+      g_ptr_array_add (args, NULL);
+
+      execvp ("ssh", (gchar **) args->pdata);
+    }
+
+  g_free (host);
+}
+
+static void
 tube_socket_connected_cb (GObject *source_object,
     GAsyncResult *res,
     gpointer user_data)
@@ -115,7 +163,6 @@ tube_socket_connected_cb (GObject *source_object,
   GSocket *socket = NULL;
   GInetAddress * inet_address = NULL;
   GSocketAddress *socket_address = NULL;
-  guint port;
   GError *error = NULL;
 
   context->tube_connection = g_socket_listener_accept_finish (listener, res,
@@ -137,24 +184,10 @@ tube_socket_connected_cb (GObject *source_object,
   if (!g_socket_listener_add_socket (listener, socket, NULL, &error))
     goto OUT;
 
-  /* Get the port on which we got bound */
-  tp_clear_object (&socket_address);
-  socket_address = g_socket_get_local_address (socket, &error);
-  if (socket_address == NULL)
-    goto OUT;
-  port = g_inet_socket_address_get_port (G_INET_SOCKET_ADDRESS (socket_address));
-
   g_socket_listener_accept_async (listener, NULL,
     ssh_socket_connected_cb, context);
 
-  /* Start ssh client, it will connect on our IPv4 socket */
-  if (fork() == 0)
-    {
-      gchar *port_str;
-
-      port_str = g_strdup_printf ("%d", port);
-      execlp ("ssh", "ssh", "127.0.0.1", "-p", port_str, NULL);
-    }
+  exec_ssh_on_socket (context, socket);
 
 OUT:
 
