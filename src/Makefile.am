@@ -2,34 +2,34 @@ AM_CPPFLAGS = \
 	-DPACKAGE_LOCALE_DIR=\""$(prefix)/$(DATADIRNAME)/locale"\" \
 	-DPACKAGE_SRC_DIR=\""$(srcdir)"\" \
 	-DPACKAGE_DATA_DIR=\""$(datadir)"\" \
-	$(TELEPATHY_SSH_CFLAGS)
+	$(SSH_CONTACT_CFLAGS)
 
 AM_CFLAGS = -Wall -g -Werror
 
-LDADD = $(TELEPATHY_SSH_LIBS)
+LDADD = $(SSH_CONTACT_LIBS)
 
-bin_PROGRAMS = telepathy-ssh telepathy-sshd
+bin_PROGRAMS = ssh-contact ssh-contact-service
 
-telepathy_ssh_SOURCES = \
+ssh_contact_SOURCES = \
 	common.c common.h \
 	client.c
 
-telepathy_sshd_SOURCES = \
+ssh_contact_service_SOURCES = \
 	common.c common.h \
 	service.c
 
 servicefiledir = $(datadir)/dbus-1/services
 servicefile_in_files = \
-	org.freedesktop.Telepathy.Client.TelepathySSH.service.in
+	org.freedesktop.Telepathy.Client.SSHContact.service.in
 
 servicefile_DATA = $(servicefile_in_files:.service.in=.service)
 
-org.freedesktop.Telepathy.Client.TelepathySSH.service: org.freedesktop.Telepathy.Client.TelepathySSH.service.in
+org.freedesktop.Telepathy.Client.SSHContact.service: org.freedesktop.Telepathy.Client.SSHContact.service.in
 	$(AM_V_GEN)sed -e "s|[@]bindir[@]|$(bindir)|" $< > $@
 
 clientfiledir = $(datarootdir)/telepathy/clients
 clientfile_DATA = \
-	TelepathySSH.client
+	SSHContact.client
 
 EXTRA_DIST = 				\
 	$(clientfile_DATA)		\

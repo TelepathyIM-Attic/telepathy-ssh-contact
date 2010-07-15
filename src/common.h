@@ -23,7 +23,7 @@
 
 #include <gio/gio.h>
 
-#define TUBE_SERVICE "reverse-ssh"
+#define TUBE_SERVICE "x-ssh-contact"
 
 G_BEGIN_DECLS
 

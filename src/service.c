@@ -165,7 +165,7 @@ main (gint argc, gchar *argv[])
   if (dbus == NULL)
     goto OUT;
 
-  client = tp_simple_handler_new (dbus, FALSE, FALSE, "TelepathySSH",
+  client = tp_simple_handler_new (dbus, FALSE, FALSE, "SSHContact",
       FALSE, got_channel_cb, NULL, NULL);
 
   tp_base_client_take_handler_filter (client, tp_asv_new (

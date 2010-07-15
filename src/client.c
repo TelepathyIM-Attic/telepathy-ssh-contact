@@ -742,7 +742,7 @@ main (gint argc, gchar *argv[])
 
   g_type_init ();
 
-  optcontext = g_option_context_new ("- Telepaty-ssh");
+  optcontext = g_option_context_new ("- ssh-contact");
   g_option_context_add_main_entries (optcontext, options, NULL);
   if (!g_option_context_parse (optcontext, &argc, &argv, &error))
     {
@@ -759,7 +759,7 @@ main (gint argc, gchar *argv[])
   if (dbus == NULL)
     goto OUT;
 
-  data.client = tp_simple_handler_new (dbus, FALSE, FALSE, "TelepathySSHClient",
+  data.client = tp_simple_handler_new (dbus, FALSE, FALSE, "SSHContactClient",
       TRUE, got_channel_cb, NULL, NULL);
 
   tp_base_client_take_handler_filter (data.client, tp_asv_new (

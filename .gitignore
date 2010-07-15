@@ -31,6 +31,6 @@ ltmain.sh
 missing
 stamp-h1
 
-src/telepathy-ssh
-src/telepathy-sshd
-src/org.freedesktop.Telepathy.Client.TelepathySSH.service
+src/ssh-contact
+src/ssh-contact-service
+src/org.freedesktop.Telepathy.Client.SSHContact.service
