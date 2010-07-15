@@ -431,12 +431,16 @@ has_stream_tube_cap (TpCapabilities *caps)
       GHashTable *fixed;
       const gchar *chan_type;
       const gchar *service;
+      TpHandleType handle_type;
 
       fixed = g_value_get_boxed (g_value_array_get_nth (arr, 0));
       chan_type = tp_asv_get_string (fixed, TP_PROP_CHANNEL_CHANNEL_TYPE);
       service = tp_asv_get_string (fixed, TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE);
+      handle_type = tp_asv_get_uint32 (fixed,
+          TP_PROP_CHANNEL_TARGET_HANDLE_TYPE, NULL);
 
       if (!tp_strdiff (chan_type, TP_IFACE_CHANNEL_TYPE_STREAM_TUBE) &&
+          handle_type == TP_HANDLE_TYPE_CONTACT &&
           (!tp_capabilities_is_specific_to_contact (caps) ||
            !tp_strdiff (service, TUBE_SERVICE)))
         return TRUE;
