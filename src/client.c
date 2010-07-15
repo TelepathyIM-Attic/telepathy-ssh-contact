@@ -52,21 +52,19 @@ typedef struct
 } ClientContext;
 
 static void
-throw_error (ClientContext *context,
-    const GError *error)
-{
-  g_debug ("Error: %s", error ? error->message : "No error message");
-  context->success = FALSE;
-  g_main_loop_quit (context->loop);
-}
-
-static void
 throw_error_message (ClientContext *context,
     const gchar *message)
 {
   g_debug ("Error: %s", message);
   context->success = FALSE;
   g_main_loop_quit (context->loop);
+}
+
+static void
+throw_error (ClientContext *context,
+    const GError *error)
+{
+  throw_error_message (context, error ? error->message : "No error message");
 }
 
 static void
