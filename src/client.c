@@ -134,14 +134,19 @@ exec_ssh_on_socket (ClientContext *context,
       g_ptr_array_add (args, "ssh");
       g_ptr_array_add (args, host);
 
-      str = g_strdup_printf ("-p %d", port);
+      g_ptr_array_add (args, "-p");
+      str = g_strdup_printf ("%d", port);
       g_ptr_array_add (args, str);
 
       if (context->login != NULL)
         {
-          str = g_strdup_printf ("-l %s", context->login);
+          g_ptr_array_add (args, "-l");
+          str = g_strdup_printf ("%s", context->login);
           g_ptr_array_add (args, str);
         }
+
+      str = g_strdup_printf ("-oHostKeyAlias=%s", context->contact_id);
+      g_ptr_array_add (args, str);
 
       g_ptr_array_add (args, NULL);
 
