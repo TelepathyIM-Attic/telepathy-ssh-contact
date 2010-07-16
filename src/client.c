@@ -113,7 +113,6 @@ exec_ssh_on_socket (ClientContext *context,
   guint16 port;
   gchar *host;
 
-  /* Get the port on which we got bound */
   socket_address = g_socket_get_local_address (socket, &error);
   if (socket_address == NULL)
     {
