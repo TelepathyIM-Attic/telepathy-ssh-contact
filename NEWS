@@ -1,3 +1,10 @@
+NEW in 0.2
+==========
+
+ - Use g_spawn_async() instead of fork()+execvp(), and handle errors.
+ - Set the GPL2 in COPYING instead of GPL3.
+ - Install ssh-contact-service in libexec path
+
 NEW in 0.1
 ==========
 

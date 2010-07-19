@@ -1,4 +1,4 @@
-AC_INIT(ssh-contact, 0.1)
+AC_INIT(ssh-contact, 0.2)
 m4_ifdef([AM_SILENT_RULES],[AM_SILENT_RULES([yes])])
 
 AM_INIT_AUTOMAKE(AC_PACKAGE_NAME, AC_PACKAGE_VERSION)
