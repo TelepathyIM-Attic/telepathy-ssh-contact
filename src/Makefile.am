@@ -8,7 +8,8 @@ AM_CFLAGS = -Wall -g -Werror
 
 LDADD = $(SSH_CONTACT_LIBS)
 
-bin_PROGRAMS = ssh-contact ssh-contact-service
+bin_PROGRAMS = ssh-contact
+libexec_PROGRAMS = ssh-contact-service
 
 ssh_contact_SOURCES = \
 	common.c common.h \
@@ -25,7 +26,7 @@ servicefile_in_files = \
 servicefile_DATA = $(servicefile_in_files:.service.in=.service)
 
 org.freedesktop.Telepathy.Client.SSHContact.service: org.freedesktop.Telepathy.Client.SSHContact.service.in
-	$(AM_V_GEN)sed -e "s|[@]bindir[@]|$(bindir)|" $< > $@
+	$(AM_V_GEN)sed -e "s|[@]libexecdir[@]|$(libexecdir)|" $< > $@
 
 clientfiledir = $(datarootdir)/telepathy/clients
 clientfile_DATA = \
