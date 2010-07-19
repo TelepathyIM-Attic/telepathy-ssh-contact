@@ -132,10 +132,13 @@ exec_ssh_on_socket (ClientContext *context,
   if (socket_address == NULL)
     {
       throw_error (context, error);
+      g_clear_error (&error);
       return;
     }
-  inet_address = g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (socket_address));
-  port = g_inet_socket_address_get_port (G_INET_SOCKET_ADDRESS (socket_address));
+  inet_address = g_inet_socket_address_get_address (
+      G_INET_SOCKET_ADDRESS (socket_address));
+  port = g_inet_socket_address_get_port (
+      G_INET_SOCKET_ADDRESS (socket_address));
   host = g_inet_address_to_string (inet_address);
 
   /* Create ssh client args */
@@ -159,17 +162,17 @@ exec_ssh_on_socket (ClientContext *context,
   g_ptr_array_add (args, NULL);
 
   /* spawn ssh client */
-  if (!g_spawn_async (NULL, (gchar **) args->pdata, NULL,
+  if (g_spawn_async (NULL, (gchar **) args->pdata, NULL,
       G_SPAWN_SEARCH_PATH | G_SPAWN_CHILD_INHERITS_STDIN |
       G_SPAWN_DO_NOT_REAP_CHILD, NULL, NULL, &pid, &error))
     {
-      throw_error (context, error);
-      goto OUT;
+      g_child_watch_add (pid, ssh_client_watch_cb, context);
     }
-
-  g_child_watch_add (pid, ssh_client_watch_cb, context);
-
-OUT:
+  else
+    {
+      throw_error (context, error);
+      g_clear_error (&error);
+    }
 
   g_ptr_array_unref (args);
 }
@@ -427,9 +430,9 @@ request_channel (ClientContext *context)
       NULL);
 
   tp_cli_channel_dispatcher_call_create_channel (dispatcher, -1,
-      tp_proxy_get_object_path (TP_PROXY (context->account)), request, G_MAXINT64,
-      tp_base_client_get_bus_name (context->client), create_channel_cb,
-      context, NULL, NULL);
+      tp_proxy_get_object_path (TP_PROXY (context->account)), request,
+      G_MAXINT64, tp_base_client_get_bus_name (context->client),
+      create_channel_cb, context, NULL, NULL);
 
   g_object_unref (dbus);
   g_object_unref (dispatcher);
@@ -456,7 +459,8 @@ has_stream_tube_cap (TpCapabilities *caps)
 
       fixed = g_value_get_boxed (g_value_array_get_nth (arr, 0));
       chan_type = tp_asv_get_string (fixed, TP_PROP_CHANNEL_CHANNEL_TYPE);
-      service = tp_asv_get_string (fixed, TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE);
+      service = tp_asv_get_string (fixed,
+          TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE);
       handle_type = tp_asv_get_uint32 (fixed,
           TP_PROP_CHANNEL_TARGET_HANDLE_TYPE, NULL);
 
@@ -882,8 +886,8 @@ main (gint argc, gchar *argv[])
     {
       gchar *account_path;
 
-      account_path = g_strconcat (TP_ACCOUNT_OBJECT_PATH_BASE, context.account_id,
-          NULL);
+      account_path = g_strconcat (TP_ACCOUNT_OBJECT_PATH_BASE,
+          context.account_id, NULL);
       context.account = tp_account_new (dbus, account_path, &error);
       if (context.account == NULL)
         goto OUT;
