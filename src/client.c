@@ -150,8 +150,7 @@ exec_ssh_on_socket (ClientContext *context,
   if (context->login != NULL)
     {
       g_ptr_array_add (args, g_strdup ("-l"));
-      str = g_strdup_printf ("%s", context->login);
-      g_ptr_array_add (args, str);
+      g_ptr_array_add (args, g_strdup (context->login));
     }
 
   str = g_strdup_printf ("-oHostKeyAlias=%s", context->contact_id);
