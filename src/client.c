@@ -104,6 +104,17 @@ ssh_socket_connected_cb (GObject *source_object,
 }
 
 static void
+ssh_client_watch_cb (GPid pid,
+    gint status,
+    gpointer user_data)
+{
+  ClientContext *context = user_data;
+
+  g_main_loop_quit (context->loop);
+  g_spawn_close_pid (pid);
+}
+
+static void
 exec_ssh_on_socket (ClientContext *context,
     GSocket *socket)
 {
@@ -112,47 +123,56 @@ exec_ssh_on_socket (ClientContext *context,
   GError *error = NULL;
   guint16 port;
   gchar *host;
+  GPtrArray *args;
+  gchar *str;
+  GPid pid;
 
+  /* Get the local host and port on which sshd is running */
   socket_address = g_socket_get_local_address (socket, &error);
   if (socket_address == NULL)
     {
       throw_error (context, error);
       return;
     }
-
   inet_address = g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (socket_address));
   port = g_inet_socket_address_get_port (G_INET_SOCKET_ADDRESS (socket_address));
   host = g_inet_address_to_string (inet_address);
 
-  if (fork() == 0)
+  /* Create ssh client args */
+  args = g_ptr_array_new_with_free_func (g_free);
+  g_ptr_array_add (args, g_strdup ("ssh"));
+  g_ptr_array_add (args, host);
+
+  g_ptr_array_add (args, g_strdup ("-p"));
+  str = g_strdup_printf ("%d", port);
+  g_ptr_array_add (args, str);
+
+  if (context->login != NULL)
     {
-      GPtrArray *args;
-      gchar *str;
-
-      args = g_ptr_array_new ();
-      g_ptr_array_add (args, "ssh");
-      g_ptr_array_add (args, host);
-
-      g_ptr_array_add (args, "-p");
-      str = g_strdup_printf ("%d", port);
+      g_ptr_array_add (args, g_strdup ("-l"));
+      str = g_strdup_printf ("%s", context->login);
       g_ptr_array_add (args, str);
-
-      if (context->login != NULL)
-        {
-          g_ptr_array_add (args, "-l");
-          str = g_strdup_printf ("%s", context->login);
-          g_ptr_array_add (args, str);
-        }
-
-      str = g_strdup_printf ("-oHostKeyAlias=%s", context->contact_id);
-      g_ptr_array_add (args, str);
-
-      g_ptr_array_add (args, NULL);
-
-      execvp ("ssh", (gchar **) args->pdata);
     }
 
-  g_free (host);
+  str = g_strdup_printf ("-oHostKeyAlias=%s", context->contact_id);
+  g_ptr_array_add (args, str);
+
+  g_ptr_array_add (args, NULL);
+
+  /* spawn ssh client */
+  if (!g_spawn_async (NULL, (gchar **) args->pdata, NULL,
+      G_SPAWN_SEARCH_PATH | G_SPAWN_CHILD_INHERITS_STDIN |
+      G_SPAWN_DO_NOT_REAP_CHILD, NULL, NULL, &pid, &error))
+    {
+      throw_error (context, error);
+      goto OUT;
+    }
+
+  g_child_watch_add (pid, ssh_client_watch_cb, context);
+
+OUT:
+
+  g_ptr_array_unref (args);
 }
 
 static void
