@@ -1,12 +1,11 @@
-AM_CPPFLAGS = \
-	-DPACKAGE_LOCALE_DIR=\""$(prefix)/$(DATADIRNAME)/locale"\" \
-	-DPACKAGE_SRC_DIR=\""$(srcdir)"\" \
-	-DPACKAGE_DATA_DIR=\""$(datadir)"\" \
-	$(SSH_CONTACT_CFLAGS)
+AM_CPPFLAGS =			\
+	$(ERROR_CFLAGS)		\
+	$(SSH_CONTACT_CFLAGS)	\
+	$(NULL)
 
-AM_CFLAGS = -Wall -g -Werror
-
-LDADD = $(SSH_CONTACT_LIBS)
+LDADD =				\
+	$(SSH_CONTACT_LIBS)	\
+	$(NULL)
 
 bin_PROGRAMS = ssh-contact
 libexec_PROGRAMS = ssh-contact-service
