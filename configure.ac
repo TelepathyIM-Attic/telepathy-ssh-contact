@@ -81,9 +81,37 @@ AC_DEFINE_UNQUOTED(GETTEXT_PACKAGE,"$GETTEXT_PACKAGE",[Gettext package name])
 AM_GLIB_GNU_GETTEXT
 
 # -----------------------------------------------------------
+# Vinagre plugin
+# -----------------------------------------------------------
+AC_ARG_ENABLE(vinagre,
+              AS_HELP_STRING([--enable-vinagre=@<:@no/yes/auto@:>@],
+                             [build with vinagre plugin]), ,
+                             enable_vinagre=auto)
+
+if test "x$enable_vinagre" != "xno"; then
+   PKG_CHECK_MODULES(VINAGRE,
+   [
+      vinagre-1.0
+      vte
+   ], have_vinagre="yes", have_vinagre="no")
+
+   if test "x$have_vinagre" = "xyes"; then
+      AC_DEFINE(HAVE_VINAGRE, 1, [Define if you have libvinagre])
+   fi
+else
+   have_vinagre=no
+fi
+
+if test "x$enable_vinagre" = "xyes" -a "x$have_vinagre" != "xyes"; then
+   AC_MSG_ERROR([Could not find vinagre dependencies.])
+fi
+AM_CONDITIONAL(HAVE_VINAGRE, test "x$have_vinagre" = "xyes")
+
+# -----------------------------------------------------------
 
 AC_OUTPUT([
 Makefile
 po/Makefile.in
 src/Makefile
+src/vinagre/Makefile
 ])
