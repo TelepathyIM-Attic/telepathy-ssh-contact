@@ -352,7 +352,8 @@ _client_create_tube_finish (GAsyncResult *result,
   g_return_val_if_fail (g_simple_async_result_is_valid (result, NULL,
       _client_create_tube_finish), NULL);
 
-  return g_simple_async_result_get_op_res_gpointer (G_SIMPLE_ASYNC_RESULT (result));
+  return g_object_ref (g_simple_async_result_get_op_res_gpointer (
+      G_SIMPLE_ASYNC_RESULT (result)));
 }
 
 GSocket *

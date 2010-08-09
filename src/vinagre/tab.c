@@ -233,6 +233,23 @@ constructed (GObject *object)
     G_OBJECT_CLASS (ssh_contact_tab_parent_class)->constructed (object);
 }
 
+static void
+dispose (GObject *object)
+{
+  SshContactTab *self = SSH_CONTACT_TAB (object);
+
+  if (self->priv->tube_connection)
+    g_io_stream_close (G_IO_STREAM (self->priv->tube_connection), NULL, NULL);
+  tp_clear_object (&self->priv->tube_connection);
+
+  if (self->priv->ssh_connection)
+    g_io_stream_close (G_IO_STREAM (self->priv->ssh_connection), NULL, NULL);
+  tp_clear_object (&self->priv->ssh_connection);
+
+  if (G_OBJECT_CLASS (ssh_contact_tab_parent_class)->dispose)
+    G_OBJECT_CLASS (ssh_contact_tab_parent_class)->dispose (object);
+}
+
 static void 
 ssh_contact_tab_class_init (SshContactTabClass *klass)
 {
@@ -240,6 +257,7 @@ ssh_contact_tab_class_init (SshContactTabClass *klass)
   VinagreTabClass* tab_class = VINAGRE_TAB_CLASS (klass);
 
   object_class->constructed = constructed;
+  object_class->dispose = dispose;
 
   tab_class->impl_get_tooltip = impl_get_tooltip;
   tab_class->impl_get_screenshot = impl_get_screenshot;
