@@ -118,4 +118,3 @@ _g_io_stream_splice (GIOStream *stream1,
 
   splice_context_unref (ctx);
 }
-

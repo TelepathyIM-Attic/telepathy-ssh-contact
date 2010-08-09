@@ -28,23 +28,21 @@
 #include <gio/gunixsocketaddress.h>
 #include <telepathy-glib/telepathy-glib.h>
 
+#include "client-helpers.h"
 #include "common.h"
 
 typedef struct
 {
   GMainLoop *loop;
 
-  gchar *account_id;
+  gchar *account_path;
   gchar *contact_id;
   gchar *login;
-
-  TpBaseClient *client;
 
   GList *accounts;
   guint n_readying_connections;
   TpAccount *account;
 
-  gchar *unix_path;
   GSocketConnection *tube_connection;
   GSocketConnection *ssh_connection;
 
@@ -68,6 +66,17 @@ throw_error (ClientContext *context,
 }
 
 static void
+ssh_client_watch_cb (GPid pid,
+    gint status,
+    gpointer user_data)
+{
+  ClientContext *context = user_data;
+
+  g_main_loop_quit (context->loop);
+  g_spawn_close_pid (pid);
+}
+
+static void
 splice_cb (GIOStream *stream1,
     GIOStream *stream2,
     const GError *error,
@@ -82,6 +91,17 @@ splice_cb (GIOStream *stream1,
 }
 
 static void
+maybe_start_splice (ClientContext *context)
+{
+  if (context->tube_connection != NULL && context->ssh_connection != NULL)
+    {
+      /* Splice tube and ssh connections */
+      _g_io_stream_splice (G_IO_STREAM (context->tube_connection),
+          G_IO_STREAM (context->ssh_connection), splice_cb, context);
+    }
+}
+
+static void
 ssh_socket_connected_cb (GObject *source_object,
     GAsyncResult *res,
     gpointer user_data)
@@ -92,386 +112,79 @@ ssh_socket_connected_cb (GObject *source_object,
 
   context->ssh_connection = g_socket_listener_accept_finish (listener, res,
       NULL, &error);
-  if (context->ssh_connection == NULL)
-    {
-      throw_error (context, error);
-      return;
-    }
-
-  /* Splice tube and ssh connections */
-  _g_io_stream_splice (G_IO_STREAM (context->tube_connection),
-      G_IO_STREAM (context->ssh_connection), splice_cb, context);
-}
-
-static void
-ssh_client_watch_cb (GPid pid,
-    gint status,
-    gpointer user_data)
-{
-  ClientContext *context = user_data;
-
-  g_main_loop_quit (context->loop);
-  g_spawn_close_pid (pid);
-}
-
-static void
-exec_ssh_on_socket (ClientContext *context,
-    GSocket *socket)
-{
-  GSocketAddress *socket_address;
-  GInetAddress *inet_address;
-  GError *error = NULL;
-  guint16 port;
-  gchar *host;
-  GPtrArray *args;
-  gchar *str;
-  GPid pid;
-
-  /* Get the local host and port on which sshd is running */
-  socket_address = g_socket_get_local_address (socket, &error);
-  if (socket_address == NULL)
+  if (error != NULL)
     {
       throw_error (context, error);
       g_clear_error (&error);
       return;
     }
-  inet_address = g_inet_socket_address_get_address (
-      G_INET_SOCKET_ADDRESS (socket_address));
-  port = g_inet_socket_address_get_port (
-      G_INET_SOCKET_ADDRESS (socket_address));
-  host = g_inet_address_to_string (inet_address);
 
-  /* Create ssh client args */
-  args = g_ptr_array_new_with_free_func (g_free);
-  g_ptr_array_add (args, g_strdup ("ssh"));
-  g_ptr_array_add (args, host);
+  maybe_start_splice (context);
+}
 
-  g_ptr_array_add (args, g_strdup ("-p"));
-  str = g_strdup_printf ("%d", port);
-  g_ptr_array_add (args, str);
+static void
+create_tube_cb (GObject *source_object,
+    GAsyncResult *res,
+    gpointer user_data)
+{
+  ClientContext *context = user_data;
+  GError *error = NULL;
 
-  if (context->login != NULL)
+  context->tube_connection = _client_create_tube_finish (res, &error);
+  if (error != NULL)
     {
-      g_ptr_array_add (args, g_strdup ("-l"));
-      g_ptr_array_add (args, g_strdup (context->login));
+      throw_error (context, error);
+      g_clear_error (&error);
+      return;
     }
 
-  str = g_strdup_printf ("-oHostKeyAlias=%s", context->contact_id);
-  g_ptr_array_add (args, str);
+  maybe_start_splice (context);
+}
 
-  g_ptr_array_add (args, NULL);
+static void
+start_tube (ClientContext *context)
+{
+  GSocketListener *listener;
+  GSocket *socket;
+  GError *error = NULL;
+  GStrv args = NULL;
+  GPid pid;
+
+  listener = g_socket_listener_new ();
+  socket = _client_create_local_socket (&error);
+  if (socket == NULL)
+    goto OUT;
+  if (!g_socket_listen (socket, &error))
+    goto OUT;
+  if (!g_socket_listener_add_socket (listener, socket, NULL, &error))
+    goto OUT;
+
+  g_socket_listener_accept_async (listener, NULL,
+      ssh_socket_connected_cb, context);
+
+  args = _client_create_exec_args (socket, context->contact_id,
+      context->login);
 
   /* spawn ssh client */
-  if (g_spawn_async (NULL, (gchar **) args->pdata, NULL,
+  if (g_spawn_async (NULL, args, NULL,
       G_SPAWN_SEARCH_PATH | G_SPAWN_CHILD_INHERITS_STDIN |
       G_SPAWN_DO_NOT_REAP_CHILD, NULL, NULL, &pid, &error))
     {
       g_child_watch_add (pid, ssh_client_watch_cb, context);
     }
-  else
-    {
-      throw_error (context, error);
-      g_clear_error (&error);
-    }
 
-  g_ptr_array_unref (args);
-}
-
-static void
-tube_socket_connected_cb (GObject *source_object,
-    GAsyncResult *res,
-    gpointer user_data)
-{
-  ClientContext *context = user_data;
-  GSocketListener *listener = G_SOCKET_LISTENER (source_object);
-  GSocket *socket = NULL;
-  GInetAddress * inet_address = NULL;
-  GSocketAddress *socket_address = NULL;
-  GError *error = NULL;
-
-  context->tube_connection = g_socket_listener_accept_finish (listener, res,
-      NULL, &error);
-  if (context->tube_connection == NULL)
-    goto OUT;
-
-  /* Create the IPv4 socket, and listen for connection on it */
-  socket = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_STREAM,
-      G_SOCKET_PROTOCOL_DEFAULT, &error);
-  if (socket == NULL)
-    goto OUT;
-  inet_address = g_inet_address_new_loopback (G_SOCKET_FAMILY_IPV4);
-  socket_address = g_inet_socket_address_new (inet_address, 0);
-  if (!g_socket_bind (socket, socket_address, FALSE, &error))
-    goto OUT;
-  if (!g_socket_listen (socket, &error))
-    goto OUT;
-  if (!g_socket_listener_add_socket (listener, socket, NULL, &error))
-    goto OUT;
-
-  g_socket_listener_accept_async (listener, NULL,
-    ssh_socket_connected_cb, context);
-
-  exec_ssh_on_socket (context, socket);
+  _client_create_tube_async (context->account_path,
+    context->contact_id, create_tube_cb, context);
 
 OUT:
 
   if (error != NULL)
     throw_error (context, error);
 
-  tp_clear_object (&socket);
-  tp_clear_object (&inet_address);
-  tp_clear_object (&socket_address);
   g_clear_error (&error);
-}
-
-static void
-offer_tube_cb (TpChannel *channel,
-    const GError *error,
-    gpointer user_data,
-    GObject *weak_object)
-{
-  ClientContext *context = user_data;
-
-  if (error != NULL)
-    throw_error (context, error);
-}
-
-static void
-channel_invalidated_cb (TpProxy *proxy,
-    guint domain,
-    gint code,
-    gchar *message,
-    ClientContext *context)
-{
-  const GError *error;
-
-  error = tp_proxy_get_invalidated (proxy);
-  throw_error (context, error);
-}
-
-static void
-handle_channel (ClientContext *context,
-    TpChannel *channel)
-{
-  gchar *dir;
-  GSocketListener *listener = NULL;
-  GSocket *socket = NULL;
-  GSocketAddress *socket_address = NULL;
-  GValue *address;
-  GHashTable *parameters;
-  GError *error = NULL;
-
-  g_signal_connect (channel, "invalidated",
-      G_CALLBACK (channel_invalidated_cb), context);
-
-  /* We are client side, but we have to offer a socket... So we offer an unix
-   * socket on which the service side can connect. We also create an IPv4 socket
-   * on which the ssh client can connect. When both sockets are connected,
-   * we can forward all communications between them. */
-
-  /* FIXME: I don't think we close socket connections, or cancel
-   * g_socket_listener_accept_async in all error cases... */
-
-  listener = g_socket_listener_new ();
-
-  /* Create temporary file for our unix socket */
-  dir = g_build_filename (g_get_tmp_dir (), "telepathy-ssh-XXXXXX", NULL);
-  dir = mkdtemp (dir);
-  context->unix_path = g_build_filename (dir, "unix-socket", NULL);
-  g_free (dir);
-
-  /* Create the unix socket, and listen for connection on it */
-  socket = g_socket_new (G_SOCKET_FAMILY_UNIX, G_SOCKET_TYPE_STREAM,
-      G_SOCKET_PROTOCOL_DEFAULT, &error);
-  if (socket == NULL)
-    goto OUT;
-  socket_address = g_unix_socket_address_new (context->unix_path);
-  if (!g_socket_bind (socket, socket_address, FALSE, &error))
-    goto OUT;
-  if (!g_socket_listen (socket, &error))
-    goto OUT;
-  if (!g_socket_listener_add_socket (listener, socket, NULL, &error))
-    goto OUT;
-
-  g_socket_listener_accept_async (listener, NULL,
-    tube_socket_connected_cb, context);
-
-  /* Offer the socket */
-  address = tp_address_variant_from_g_socket_address (socket_address,
-      TP_SOCKET_ADDRESS_TYPE_UNIX, &error);
-  if (address == NULL)
-    goto OUT;
-  parameters = g_hash_table_new (NULL, NULL);
-  tp_cli_channel_type_stream_tube_call_offer (channel, -1,
-      TP_SOCKET_ADDRESS_TYPE_UNIX, address,
-      TP_SOCKET_ACCESS_CONTROL_LOCALHOST, parameters,
-      offer_tube_cb, context, NULL, NULL);
-  tp_g_value_slice_free (address);
-  g_hash_table_unref (parameters);
-
-OUT:
-
-  if (error != NULL)
-    throw_error (context, error);
-
   tp_clear_object (&listener);
   tp_clear_object (&socket);
-  tp_clear_object (&socket_address);
-  g_clear_error (&error);
-}
-
-static void
-got_channel_cb (TpSimpleHandler *handler,
-    TpAccount *account,
-    TpConnection *connection,
-    GList *channels,
-    GList *requests_satisfied,
-    gint64 user_action_time,
-    TpHandleChannelsContext *channel_context,
-    gpointer user_data)
-{
-  ClientContext *context = user_data;
-  GList *l;
-
-  for (l = channels; l != NULL; l = l->next)
-    {
-      TpChannel *channel = l->data;
-
-      if (tp_strdiff (tp_channel_get_channel_type (channel),
-          TP_IFACE_CHANNEL_TYPE_STREAM_TUBE))
-        continue;
-
-      handle_channel (context, channel);
-    }
-
-  tp_handle_channels_context_accept (channel_context);
-}
-
-static void
-channel_request_invalidated_cb (TpProxy *proxy,
-    guint domain,
-    gint code,
-    gchar *message,
-    ClientContext *context)
-{
-  const GError *error;
-
-  error = tp_proxy_get_invalidated (proxy);
-  if (!g_error_matches (error, TP_DBUS_ERRORS, TP_DBUS_ERROR_OBJECT_REMOVED))
-    throw_error (context, error);
-
-  g_object_unref (proxy);
-}
-
-static void
-request_proceed_cb (TpChannelRequest *request,
-    const GError *error,
-    gpointer user_data,
-    GObject *weak_object)
-{
-  ClientContext *context = user_data;
-
-  if (error != NULL)
-    throw_error (context, error);
-}
-
-static void
-create_channel_cb (TpChannelDispatcher *dispatcher,
-    const gchar *request_path,
-    const GError *error,
-    gpointer user_data,
-    GObject *weak_object)
-{
-  ClientContext *context = user_data;
-  TpDBusDaemon *dbus;
-  TpChannelRequest *request;
-  GError *err = NULL;
-
-  if (error != NULL)
-    {
-      throw_error (context, error);
-      return;
-    }
-
-  dbus = tp_proxy_get_dbus_daemon (TP_PROXY (dispatcher));
-  request = tp_channel_request_new (dbus, request_path, NULL, &err);
-  if (request == NULL)
-    {
-      throw_error (context, err);
-      g_clear_error (&err);
-      return;
-    }
-
-  g_signal_connect (request, "invalidated",
-      G_CALLBACK (channel_request_invalidated_cb), context);
-
-  tp_cli_channel_request_call_proceed (request, -1, request_proceed_cb,
-      context, NULL, NULL);
-}
-
-static void
-request_channel (ClientContext *context)
-{
-  TpDBusDaemon *dbus = NULL;
-  TpChannelDispatcher *dispatcher = NULL;
-  GHashTable *request = NULL;
-
-  dbus = tp_dbus_daemon_dup (NULL);
-  dispatcher = tp_channel_dispatcher_new (dbus);
-  request = tp_asv_new (
-      TP_PROP_CHANNEL_CHANNEL_TYPE, G_TYPE_STRING,
-        TP_IFACE_CHANNEL_TYPE_STREAM_TUBE,
-      TP_PROP_CHANNEL_TARGET_HANDLE_TYPE, G_TYPE_UINT,
-        TP_HANDLE_TYPE_CONTACT,
-      TP_PROP_CHANNEL_TARGET_ID, G_TYPE_STRING,
-        context->contact_id,
-      TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE, G_TYPE_STRING,
-        TUBE_SERVICE,
-      NULL);
-
-  tp_cli_channel_dispatcher_call_create_channel (dispatcher, -1,
-      tp_proxy_get_object_path (TP_PROXY (context->account)), request,
-      G_MAXINT64, tp_base_client_get_bus_name (context->client),
-      create_channel_cb, context, NULL, NULL);
-
-  g_object_unref (dbus);
-  g_object_unref (dispatcher);
-  g_hash_table_unref (request);
-}
-
-static gboolean
-has_stream_tube_cap (TpCapabilities *caps)
-{
-  GPtrArray *classes;
-  guint i;
-
-  if (caps == NULL)
-    return FALSE;
-
-  classes = tp_capabilities_get_channel_classes (caps);
-  for (i = 0; i < classes->len; i++)
-    {
-      GValueArray *arr = g_ptr_array_index (classes, i);
-      GHashTable *fixed;
-      const gchar *chan_type;
-      const gchar *service;
-      TpHandleType handle_type;
-
-      fixed = g_value_get_boxed (g_value_array_get_nth (arr, 0));
-      chan_type = tp_asv_get_string (fixed, TP_PROP_CHANNEL_CHANNEL_TYPE);
-      service = tp_asv_get_string (fixed,
-          TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE);
-      handle_type = tp_asv_get_uint32 (fixed,
-          TP_PROP_CHANNEL_TARGET_HANDLE_TYPE, NULL);
-
-      if (!tp_strdiff (chan_type, TP_IFACE_CHANNEL_TYPE_STREAM_TUBE) &&
-          handle_type == TP_HANDLE_TYPE_CONTACT &&
-          (!tp_capabilities_is_specific_to_contact (caps) ||
-           !tp_strdiff (service, TUBE_SERVICE)))
-        return TRUE;
-    }
-
-  return FALSE;
+  g_strfreev (args);
 }
 
 static void
@@ -499,7 +212,7 @@ got_contacts_cb (TpConnection *connection,
 
   /* Build a list of all contacts supporting StreamTube */
   for (i = 0; i < n_contacts; i++)
-    if (has_stream_tube_cap (tp_contact_get_capabilities (contacts[i])))
+    if (_capabilities_has_stream_tube (tp_contact_get_capabilities (contacts[i])))
       candidates = g_list_prepend (candidates, contacts[i]);
 
   if (candidates == NULL)
@@ -531,7 +244,7 @@ got_contacts_cb (TpConnection *connection,
     }
 
   context->contact_id = g_strdup (tp_contact_get_identifier (l->data));
-  request_channel (context);
+  start_tube (context);
 
   g_list_free (candidates);
 }
@@ -611,7 +324,7 @@ chooser_contact (ClientContext *context)
 
   /* If a contact ID was passed in the options, use it */
   if (context->contact_id != NULL)
-    request_channel (context);
+    start_tube (context);
 
   /* Otherwise, we'll get TpContact objects for all stored contacts on that
    * account. */
@@ -668,15 +381,11 @@ chooser_account (ClientContext *context)
 
   /* If the account id was not in the options, print it now. It makes easier to
   * copy/paste later. */
-  if (context->account_id == NULL)
+  if (context->account_path == NULL)
     {
-      const gchar *account_path;
-
-      account_path = tp_proxy_get_object_path (context->account);
-      context->account_id = g_strdup (account_path +
-          strlen (TP_ACCOUNT_OBJECT_PATH_BASE));
-
-      g_print ("Going to use account: '%s'\n", context->account_id);
+      context->account_path = g_strdup (tp_proxy_get_object_path (context->account));
+      g_print ("Going to use account: '%s'\n",
+          context->account_path + strlen (TP_ACCOUNT_OBJECT_PATH_BASE));
     }
 
   chooser_contact (context);
@@ -691,7 +400,7 @@ connection_prepare_cb (GObject *object,
   ClientContext *context = user_data;
 
   if (!tp_proxy_prepare_finish (TP_PROXY (connection), res, NULL) ||
-      !has_stream_tube_cap (tp_connection_get_capabilities (connection)))
+      !_capabilities_has_stream_tube (tp_connection_get_capabilities (connection)))
     {
       GList *l;
 
@@ -797,26 +506,14 @@ static void
 client_context_clear (ClientContext *context)
 {
   tp_clear_pointer (&context->loop, g_main_loop_unref);
-  g_free (context->account_id);
+  g_free (context->account_path);
   g_free (context->contact_id);
   g_free (context->login);
-
-  tp_clear_object (&context->client);
 
   g_list_foreach (context->accounts, (GFunc) g_object_unref, NULL);
   g_list_free (context->accounts);
   tp_clear_object (&context->account);
 
-  if (context->unix_path != NULL)
-    {
-      gchar *p;
-
-      g_unlink (context->unix_path);
-      p = g_strrstr (context->unix_path, G_DIR_SEPARATOR_S);
-      *p = '\0';
-      g_rmdir (context->unix_path);
-      g_free (context->unix_path);
-    }
   tp_clear_object (&context->tube_connection);
   tp_clear_object (&context->ssh_connection);
 }
@@ -827,10 +524,11 @@ main (gint argc, gchar *argv[])
   TpDBusDaemon *dbus = NULL;
   GError *error = NULL;
   ClientContext context = { 0, };
+  gchar *account_id = NULL;
   GOptionContext *optcontext;
   GOptionEntry options[] = {
       { "account", 'a',
-        0, G_OPTION_ARG_STRING, &context.account_id,
+        0, G_OPTION_ARG_STRING, &account_id,
         "The account ID",
         NULL },
       { "contact", 'c',
@@ -863,39 +561,18 @@ main (gint argc, gchar *argv[])
   if (dbus == NULL)
     goto OUT;
 
-  context.client = tp_simple_handler_new (dbus, FALSE, FALSE,
-      "SSHContactClient", TRUE, got_channel_cb, &context, NULL);
-
-  tp_base_client_take_handler_filter (context.client, tp_asv_new (
-      TP_PROP_CHANNEL_CHANNEL_TYPE, G_TYPE_STRING,
-        TP_IFACE_CHANNEL_TYPE_STREAM_TUBE,
-      TP_PROP_CHANNEL_TARGET_HANDLE_TYPE, G_TYPE_UINT,
-        TP_HANDLE_TYPE_CONTACT,
-      TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE, G_TYPE_STRING,
-        "ssh",
-      TP_PROP_CHANNEL_REQUESTED, G_TYPE_BOOLEAN,
-        TRUE,
-      NULL));
-
-  if (!tp_base_client_register (context.client, &error))
-    goto OUT;
-
   /* If an account id was specified in options, then prepare it, otherwise
    * we get the account manager to get a list of all accounts */
-  if (context.account_id != NULL)
+  if (account_id != NULL)
     {
-      gchar *account_path;
-
-      account_path = g_strconcat (TP_ACCOUNT_OBJECT_PATH_BASE,
-          context.account_id, NULL);
-      context.account = tp_account_new (dbus, account_path, &error);
+      context.account_path = g_strconcat (TP_ACCOUNT_OBJECT_PATH_BASE,
+          account_id, NULL);
+      context.account = tp_account_new (dbus, context.account_path, &error);
       if (context.account == NULL)
         goto OUT;
 
       tp_proxy_prepare_async (TP_PROXY (context.account), NULL,
           account_prepare_cb, &context);
-
-      g_free (account_path);
     }
   else
     {
@@ -922,6 +599,7 @@ OUT:
   tp_clear_object (&dbus);
   g_clear_error (&error);
   client_context_clear (&context);
+  g_free (account_id);
 
   return context.success ? EXIT_SUCCESS : EXIT_FAILURE;
 }

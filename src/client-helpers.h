@@ -18,22 +18,27 @@
  * Boston, MA  02110-1301  USA
  */
 
-#ifndef __COMMON_H__
-#define __COMMON_H__
+#ifndef __CLIENT_HELPERS_H__
+#define __CLIENT_HELPERS_H__
 
 #include <gio/gio.h>
 #include <telepathy-glib/telepathy-glib.h>
 
-#define TUBE_SERVICE "x-ssh-contact"
-
 G_BEGIN_DECLS
 
-typedef void (*_GIOStreamSpliceCallback) (GIOStream *stream1,
-    GIOStream *stream2, const GError *error, gpointer user_data);
+void _client_create_tube_async (const gchar *account_path,
+    const gchar *contact_id, GAsyncReadyCallback callback, gpointer user_data);
 
-void _g_io_stream_splice (GIOStream *stream1, GIOStream *stream2,
-    _GIOStreamSpliceCallback callback, gpointer user_data);
+GSocketConnection *_client_create_tube_finish (GAsyncResult *res,
+    GError **error);
+
+GSocket * _client_create_local_socket (GError **error);
+
+GStrv  _client_create_exec_args (GSocket *socket,
+    const gchar *contact_id, const gchar *username);
+
+gboolean _capabilities_has_stream_tube (TpCapabilities *caps);
 
 G_END_DECLS
 
-#endif /* #ifndef __COMMON_H__*/
+#endif /* #ifndef __CLIENT_HELPERS_H__*/
