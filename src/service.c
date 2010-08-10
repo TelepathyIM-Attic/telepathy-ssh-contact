@@ -28,27 +28,46 @@
 #include "common.h"
 
 static GMainLoop *loop = NULL;
-static guint n_sessions = 0;
+static GList *channel_list = NULL;
+
+static void channel_invalidated_cb (TpChannel *channel, guint domain, gint code,
+    gchar *message, gpointer user_data);
 
 static void
-throw_error (const GError *error)
+session_complete (TpChannel *channel, const GError *error)
 {
-  g_debug ("Error: %s", error ? error->message : "No error message");
+  if (error != NULL)
+    {
+      g_debug ("Error for channel %p: %s", channel,
+          error ? error->message : "No error message");
+    }
 
-  if (--n_sessions == 0)
+  g_signal_handlers_disconnect_by_func (channel, channel_invalidated_cb, NULL);
+  tp_cli_channel_call_close (channel, -1, NULL, NULL, NULL, NULL);
+  channel_list = g_list_remove (channel_list, channel);
+  g_object_unref (channel);
+
+  if (channel_list == NULL)
     g_main_loop_quit (loop);
+}
+
+static void
+channel_invalidated_cb (TpChannel *channel,
+    guint domain,
+    gint code,
+    gchar *message,
+    gpointer user_data)
+{
+  session_complete (channel, tp_proxy_get_invalidated (TP_PROXY (channel)));
 }
 
 static void
 splice_cb (GIOStream *stream1,
     GIOStream *stream2,
     const GError *error,
-    gpointer user_data)
+    gpointer channel)
 {
-  if (error != NULL)
-    throw_error (error);
-  else if (--n_sessions == 0)
-    g_main_loop_quit (loop);
+  session_complete (channel, error);
 }
 
 static void
@@ -67,7 +86,7 @@ accept_tube_cb (TpChannel *channel,
 
   if (error != NULL)
     {
-      throw_error (error);
+      session_complete (channel, error);
       return;
     }
 
@@ -99,12 +118,12 @@ accept_tube_cb (TpChannel *channel,
 
   /* Splice tube and ssh connections */
   _g_io_stream_splice (G_IO_STREAM (tube_connection),
-      G_IO_STREAM (sshd_connection), splice_cb, NULL);
+      G_IO_STREAM (sshd_connection), splice_cb, channel);
 
 OUT:
 
   if (err != NULL)
-    throw_error (err);
+    session_complete (channel, err);
 
   tp_clear_object (&inet_address);
   tp_clear_object (&socket_address);
@@ -138,7 +157,11 @@ got_channel_cb (TpSimpleHandler *handler,
           TP_IFACE_CHANNEL_TYPE_STREAM_TUBE))
         continue;
 
-      n_sessions++;
+      g_debug ("New channel: %p", channel);
+
+      channel_list = g_list_prepend (channel_list, g_object_ref (channel));
+      g_signal_connect (channel, "invalidated",
+          G_CALLBACK (channel_invalidated_cb), NULL);
 
       tp_cli_channel_type_stream_tube_call_accept (channel, -1,
           TP_SOCKET_ADDRESS_TYPE_UNIX,
