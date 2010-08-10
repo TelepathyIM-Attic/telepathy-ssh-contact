@@ -25,7 +25,6 @@
 typedef struct
 {
   guint ref_count;
-  gboolean closed;
   GError *error;
 
   GIOStream *stream1;
@@ -60,20 +59,6 @@ splice_context_unref (SpliceContext *self)
 }
 
 static void
-splice_context_close (SpliceContext *self, const GError *error)
-{
-  if (self->closed)
-    return;
-  self->closed = TRUE;
-
-  if (error != NULL)
-    self->error = g_error_copy (error);
-
-  g_io_stream_close (self->stream1, NULL, NULL);
-  g_io_stream_close (self->stream2, NULL, NULL);
-}
-
-static void
 splice_cb (GObject *ostream,
     GAsyncResult *res,
     gpointer user_data)
@@ -83,10 +68,15 @@ splice_cb (GObject *ostream,
 
   g_output_stream_splice_finish (G_OUTPUT_STREAM (ostream), res, &error);
 
-  splice_context_close (ctx, error);
-  splice_context_unref (ctx);
+  if (ctx->error == NULL && error != NULL)
+    ctx->error = error;
+  else
+    g_clear_error (&error);
 
-  g_clear_error (&error);
+  g_io_stream_close (ctx->stream1, NULL, NULL);
+  g_io_stream_close (ctx->stream2, NULL, NULL);
+
+  splice_context_unref (ctx);
 }
 
 void
