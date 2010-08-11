@@ -88,7 +88,7 @@ AM_GLIB_GNU_GETTEXT
 AC_ARG_ENABLE(vinagre,
               AS_HELP_STRING([--enable-vinagre=@<:@no/yes/auto@:>@],
                              [build with vinagre plugin]), ,
-                             enable_vinagre=auto)
+                             enable_vinagre=no)
 
 if test "x$enable_vinagre" != "xno"; then
    PKG_CHECK_MODULES(VINAGRE,
