@@ -5,11 +5,13 @@ AC_COPYRIGHT([
   Copyright (C) 2010 Collabora Ltd.
 ])
 
+ifelse(released, 1, [], [enable_maintainer_mode="yes"])
+AM_MAINTAINER_MODE
+
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_SRCDIR([configure.ac])
 AC_CONFIG_AUX_DIR(.)
-AM_MAINTAINER_MODE
 AM_INIT_AUTOMAKE(1.9 dist-bzip2 no-define -Wno-portability)
 m4_ifdef([AM_SILENT_RULES],[AM_SILENT_RULES([yes])])
 AC_ISC_POSIX
@@ -25,7 +27,7 @@ IT_PROG_INTLTOOL([0.35.0])
 
 PKG_CHECK_MODULES(SSH_CONTACT,
 [
-  telepathy-glib >= 0.11.9
+  telepathy-glib >= 0.11.12
   glib-2.0 >= 2.24
   gio-2.0
   gio-unix-2.0

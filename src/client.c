@@ -43,6 +43,7 @@ typedef struct
   guint n_readying_connections;
   TpAccount *account;
 
+  TpChannel *channel;
   GSocketConnection *tube_connection;
   GSocketConnection *ssh_connection;
 
@@ -77,28 +78,19 @@ ssh_client_watch_cb (GPid pid,
 }
 
 static void
-splice_cb (GIOStream *stream1,
-    GIOStream *stream2,
-    const GError *error,
+splice_cb (GObject *source_object,
+    GAsyncResult *res,
     gpointer user_data)
 {
   ClientContext *context = user_data;
+  GError *error = NULL;
 
-  if (error != NULL)
+  if (!_g_io_stream_splice_finish (res, &error))
     throw_error (context, error);
   else
     g_main_loop_quit (context->loop);
-}
 
-static void
-maybe_start_splice (ClientContext *context)
-{
-  if (context->tube_connection != NULL && context->ssh_connection != NULL)
-    {
-      /* Splice tube and ssh connections */
-      _g_io_stream_splice (G_IO_STREAM (context->tube_connection),
-          G_IO_STREAM (context->ssh_connection), splice_cb, context);
-    }
+  g_clear_error (&error);
 }
 
 static void
@@ -119,7 +111,9 @@ ssh_socket_connected_cb (GObject *source_object,
       return;
     }
 
-  maybe_start_splice (context);
+  /* Splice tube and ssh connections */
+  _g_io_stream_splice_async (G_IO_STREAM (context->tube_connection),
+      G_IO_STREAM (context->ssh_connection), splice_cb, context);
 }
 
 static void
@@ -128,27 +122,20 @@ create_tube_cb (GObject *source_object,
     gpointer user_data)
 {
   ClientContext *context = user_data;
+  GSocketListener *listener;
+  GSocket *socket;
+  GStrv args = NULL;
+  GPid pid;
   GError *error = NULL;
 
-  context->tube_connection = _client_create_tube_finish (res, &error);
+  context->tube_connection = _client_create_tube_finish (res, &context->channel,
+      &error);
   if (error != NULL)
     {
       throw_error (context, error);
       g_clear_error (&error);
       return;
     }
-
-  maybe_start_splice (context);
-}
-
-static void
-start_tube (ClientContext *context)
-{
-  GSocketListener *listener;
-  GSocket *socket;
-  GError *error = NULL;
-  GStrv args = NULL;
-  GPid pid;
 
   listener = g_socket_listener_new ();
   socket = _client_create_local_socket (&error);
@@ -173,9 +160,6 @@ start_tube (ClientContext *context)
       g_child_watch_add (pid, ssh_client_watch_cb, context);
     }
 
-  _client_create_tube_async (context->account_path,
-    context->contact_id, create_tube_cb, context);
-
 OUT:
 
   if (error != NULL)
@@ -185,6 +169,13 @@ OUT:
   tp_clear_object (&listener);
   tp_clear_object (&socket);
   g_strfreev (args);
+}
+
+static void
+start_tube (ClientContext *context)
+{
+  _client_create_tube_async (context->account_path,
+    context->contact_id, NULL, create_tube_cb, context);
 }
 
 static void
@@ -514,6 +505,7 @@ client_context_clear (ClientContext *context)
   g_list_free (context->accounts);
   tp_clear_object (&context->account);
 
+  tp_clear_object (&context->channel);
   tp_clear_object (&context->tube_connection);
   tp_clear_object (&context->ssh_connection);
 }

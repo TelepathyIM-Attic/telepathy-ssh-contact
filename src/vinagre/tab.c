@@ -22,6 +22,8 @@
 #include <vte/vte.h>
 #include <gdk/gdkkeysyms.h>
 
+#include <telepathy-glib/telepathy-glib.h>
+
 #include <vinagre/vinagre-utils.h>
 #include <vinagre/vinagre-prefs.h>
 
@@ -33,8 +35,10 @@
 struct _SshContactTabPrivate
 {
   GtkWidget *vte;
+  TpChannel *channel;
   GSocketConnection *tube_connection;
   GSocketConnection *ssh_connection;
+  gboolean connected:1;
 };
 
 G_DEFINE_TYPE (SshContactTab, ssh_contact_tab, VINAGRE_TYPE_TAB)
@@ -100,34 +104,26 @@ throw_error (SshContactTab *self,
     const GError *error)
 {
   g_debug ("ERROR: %s", error->message);
-  g_signal_emit_by_name (self, "tab-auth-failed", error->message);
+  if (self->priv->connected)
+    g_signal_emit_by_name (self, "tab-disconnected");
+  else
+    g_signal_emit_by_name (self, "tab-auth-failed", error->message);
 }
 
 static void
-splice_cb (GIOStream *stream1,
-    GIOStream *stream2,
-    const GError *error,
+splice_cb (GObject *source_object,
+    GAsyncResult *res,
     gpointer user_data)
 {
   SshContactTab *self = user_data;
+  GError *error = NULL;
 
-  if (error != NULL)
+  if (!_g_io_stream_splice_finish (res, &error))
     throw_error (self, error);
   else
       g_signal_emit_by_name (self, "tab-disconnected");
-}
 
-static void
-maybe_start_splice (SshContactTab *self)
-{
-  if (self->priv->tube_connection != NULL && self->priv->ssh_connection != NULL)
-    {
-      g_signal_emit_by_name (self, "tab-connected");
-
-      /* Splice tube and ssh connections */
-      _g_io_stream_splice (G_IO_STREAM (self->priv->tube_connection),
-          G_IO_STREAM (self->priv->ssh_connection), splice_cb, self);
-    }
+  g_clear_error (&error);
 }
 
 static void
@@ -148,7 +144,12 @@ ssh_socket_connected_cb (GObject *source_object,
       return;
     }
 
-  maybe_start_splice (self);
+  g_signal_emit_by_name (self, "tab-connected");
+  self->priv->connected = TRUE;
+
+  /* Splice tube and ssh connections */
+  _g_io_stream_splice_async (G_IO_STREAM (self->priv->tube_connection),
+      G_IO_STREAM (self->priv->ssh_connection), splice_cb, self);
 }
 
 static void
@@ -157,34 +158,21 @@ create_tube_cb (GObject *source_object,
     gpointer user_data)
 {
   SshContactTab *self = user_data;
+  GSocketListener *listener;
+  GSocket *socket;
+  const gchar *username;
+  const gchar *contact_id;
+  GStrv args = NULL;
   GError *error = NULL;
 
-  self->priv->tube_connection = _client_create_tube_finish (res, &error);
+  self->priv->tube_connection = _client_create_tube_finish (res,
+      &self->priv->channel, &error);
   if (error != NULL)
     {
       throw_error (self, error);
       g_clear_error (&error);
       return;
     }
-
-  maybe_start_splice (self);
-}
-
-static gboolean
-start_tube (gpointer user_data)
-{
-  SshContactTab *self = user_data;
-  const gchar *username;
-  const gchar *account_path;
-  const gchar *contact_id;
-  GSocketListener *listener;
-  GSocket *socket;
-  GError *error = NULL;
-  GStrv args = NULL;
-
-  g_signal_emit_by_name (self, "tab-initialized");
-
-  get_connection_info (self, &account_path, &contact_id, &username);
 
   listener = g_socket_listener_new ();
   socket = _client_create_local_socket (&error);
@@ -198,11 +186,10 @@ start_tube (gpointer user_data)
   g_socket_listener_accept_async (listener, NULL,
       ssh_socket_connected_cb, self);
 
+  get_connection_info (self, NULL, &contact_id, &username);
   args = _client_create_exec_args (socket, contact_id, username);
   vte_terminal_fork_command (VTE_TERMINAL (self->priv->vte), "ssh", args,
       NULL, NULL, FALSE, FALSE, FALSE);
-
-  _client_create_tube_async (account_path, contact_id, create_tube_cb, self);
 
 OUT:
 
@@ -213,6 +200,20 @@ OUT:
   tp_clear_object (&listener);
   tp_clear_object (&socket);
   g_strfreev (args);
+}
+
+static gboolean
+start_tube (gpointer user_data)
+{
+  SshContactTab *self = user_data;
+  const gchar *account_path;
+  const gchar *contact_id;
+
+  g_signal_emit_by_name (self, "tab-initialized");
+
+  get_connection_info (self, &account_path, &contact_id, NULL);
+  _client_create_tube_async (account_path, contact_id, NULL, create_tube_cb,
+      self);
 
   return FALSE;
 }
@@ -245,6 +246,8 @@ dispose (GObject *object)
   if (self->priv->ssh_connection)
     g_io_stream_close (G_IO_STREAM (self->priv->ssh_connection), NULL, NULL);
   tp_clear_object (&self->priv->ssh_connection);
+
+  tp_clear_object (&self->priv->channel);
 
   if (G_OBJECT_CLASS (ssh_contact_tab_parent_class)->dispose)
     G_OBJECT_CLASS (ssh_contact_tab_parent_class)->dispose (object);

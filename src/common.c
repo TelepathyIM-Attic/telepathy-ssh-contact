@@ -24,38 +24,21 @@
 
 typedef struct
 {
-  guint ref_count;
-  GError *error;
-
   GIOStream *stream1;
   GIOStream *stream2;
-
-  _GIOStreamSpliceCallback callback;
-  gpointer user_data;
+  GCancellable *op1_cancellable;
+  GCancellable *op2_cancellable;
+  gboolean completed:1;
 } SpliceContext;
 
-static SpliceContext *
-splice_context_ref (SpliceContext *self)
-{
-  self->ref_count++;
-  return self;
-}
-
 static void
-splice_context_unref (SpliceContext *self)
+splice_context_free (SpliceContext *ctx)
 {
-  if (--self->ref_count == 0)
-    {
-      if (self->callback != NULL)
-        self->callback (self->stream1, self->stream2, self->error,
-            self->user_data);
-
-      g_clear_error (&self->error);
-      g_object_unref (self->stream1);
-      g_object_unref (self->stream2);
-
-      g_slice_free (SpliceContext, self);
-    }
+  g_object_unref (ctx->stream1);
+  g_object_unref (ctx->stream2);
+  g_object_unref (ctx->op1_cancellable);
+  g_object_unref (ctx->op2_cancellable);
+  g_slice_free (SpliceContext, ctx);
 }
 
 static void
@@ -63,48 +46,82 @@ splice_cb (GObject *ostream,
     GAsyncResult *res,
     gpointer user_data)
 {
-  SpliceContext *ctx = user_data;
+  GSimpleAsyncResult *simple = user_data;
+  SpliceContext *ctx;
   GError *error = NULL;
 
   g_output_stream_splice_finish (G_OUTPUT_STREAM (ostream), res, &error);
 
-  if (ctx->error == NULL && error != NULL)
-    ctx->error = error;
-  else
-    g_clear_error (&error);
+  ctx = g_simple_async_result_get_op_res_gpointer (simple);
+  if (!ctx->completed)
+    {
+      ctx->completed = TRUE;
 
-  g_io_stream_close (ctx->stream1, NULL, NULL);
-  g_io_stream_close (ctx->stream2, NULL, NULL);
+      if (error != NULL)
+        g_simple_async_result_set_from_error (simple, error);
+      g_simple_async_result_complete_in_idle (simple);
 
-  splice_context_unref (ctx);
+      g_cancellable_cancel (ctx->op1_cancellable);
+      g_cancellable_cancel (ctx->op2_cancellable);
+    }
+
+  g_clear_error (&error);
+  g_object_unref (simple);
 }
 
 void
-_g_io_stream_splice (GIOStream *stream1,
+_g_io_stream_splice_async (GIOStream *stream1,
     GIOStream *stream2,
-    _GIOStreamSpliceCallback callback,
+    GAsyncReadyCallback callback,
     gpointer user_data)
 {
+  GSimpleAsyncResult *simple;
   SpliceContext *ctx;
   GInputStream *istream;
   GOutputStream *ostream;
 
   ctx = g_slice_new0 (SpliceContext);
-  ctx->ref_count = 1;
   ctx->stream1 = g_object_ref (stream1);
   ctx->stream2 = g_object_ref (stream2);
-  ctx->callback = callback;
-  ctx->user_data = user_data;
+  ctx->op1_cancellable = g_cancellable_new ();
+  ctx->op2_cancellable = g_cancellable_new ();
+
+  simple = g_simple_async_result_new (NULL, callback, user_data,
+      _g_io_stream_splice_finish);
+  g_simple_async_result_set_op_res_gpointer (simple, ctx,
+      (GDestroyNotify) splice_context_free);
 
   istream = g_io_stream_get_input_stream (stream1);
   ostream = g_io_stream_get_output_stream (stream2);
   g_output_stream_splice_async (ostream, istream, G_OUTPUT_STREAM_SPLICE_NONE,
-      G_PRIORITY_DEFAULT, NULL, splice_cb, splice_context_ref (ctx));
+      G_PRIORITY_DEFAULT, ctx->op1_cancellable, splice_cb,
+      g_object_ref (simple));
   
   istream = g_io_stream_get_input_stream (stream2);
   ostream = g_io_stream_get_output_stream (stream1);
   g_output_stream_splice_async (ostream, istream, G_OUTPUT_STREAM_SPLICE_NONE,
-      G_PRIORITY_DEFAULT, NULL, splice_cb, splice_context_ref (ctx));
+      G_PRIORITY_DEFAULT, ctx->op2_cancellable, splice_cb,
+      g_object_ref (simple));
 
-  splice_context_unref (ctx);
+  g_object_unref (simple);
 }
+
+gboolean
+_g_io_stream_splice_finish (GAsyncResult *result,
+    GError **error)
+{
+  GSimpleAsyncResult *simple;
+
+  g_return_val_if_fail (G_IS_SIMPLE_ASYNC_RESULT (result), FALSE);
+
+  simple = G_SIMPLE_ASYNC_RESULT (result);
+
+  if (g_simple_async_result_propagate_error (simple, error))
+    return FALSE;
+
+  g_return_val_if_fail (g_simple_async_result_is_valid (result, NULL,
+      _g_io_stream_splice_finish), FALSE);
+
+  return TRUE;
+}
+

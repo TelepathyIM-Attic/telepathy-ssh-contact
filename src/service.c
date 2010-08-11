@@ -62,12 +62,15 @@ channel_invalidated_cb (TpChannel *channel,
 }
 
 static void
-splice_cb (GIOStream *stream1,
-    GIOStream *stream2,
-    const GError *error,
+splice_cb (GObject *source_object,
+    GAsyncResult *res,
     gpointer channel)
 {
+  GError *error = NULL;
+
+  _g_io_stream_splice_finish (res, &error);
   session_complete (channel, error);
+  g_clear_error (&error);
 }
 
 static void
@@ -117,7 +120,7 @@ accept_tube_cb (TpChannel *channel,
   sshd_connection = g_socket_connection_factory_create_connection (socket);
 
   /* Splice tube and ssh connections */
-  _g_io_stream_splice (G_IO_STREAM (tube_connection),
+  _g_io_stream_splice_async (G_IO_STREAM (tube_connection),
       G_IO_STREAM (sshd_connection), splice_cb, channel);
 
 OUT:
@@ -155,9 +158,10 @@ got_channel_cb (TpSimpleHandler *handler,
 
       if (tp_strdiff (tp_channel_get_channel_type (channel),
           TP_IFACE_CHANNEL_TYPE_STREAM_TUBE))
-        continue;
-
-      g_debug ("New channel: %p", channel);
+        {
+          g_print ("%s\n", tp_channel_get_channel_type (channel));
+          continue;
+        }
 
       channel_list = g_list_prepend (channel_list, g_object_ref (channel));
       g_signal_connect (channel, "invalidated",

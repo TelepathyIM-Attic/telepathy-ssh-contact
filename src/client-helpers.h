@@ -27,9 +27,11 @@
 G_BEGIN_DECLS
 
 void _client_create_tube_async (const gchar *account_path,
-    const gchar *contact_id, GAsyncReadyCallback callback, gpointer user_data);
+    const gchar *contact_id, GCancellable *cancellable,
+    GAsyncReadyCallback callback, gpointer user_data);
 
 GSocketConnection *_client_create_tube_finish (GAsyncResult *res,
+    TpChannel **channel,
     GError **error);
 
 GSocket * _client_create_local_socket (GError **error);
