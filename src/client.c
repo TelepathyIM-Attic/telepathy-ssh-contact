@@ -57,7 +57,7 @@ static void
 throw_error_message (ClientContext *context,
     const gchar *message)
 {
-  g_debug ("Error: %s", message);
+  g_print ("Error: %s", message);
   context->success = FALSE;
   g_main_loop_quit (context->loop);
 }
