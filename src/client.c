@@ -34,6 +34,7 @@
 typedef struct
 {
   GMainLoop *loop;
+  gchar *argv0;
 
   gchar *account_path;
   gchar *contact_id;
@@ -47,6 +48,8 @@ typedef struct
   GSocketConnection *tube_connection;
   GSocketConnection *ssh_connection;
 
+  gboolean account_set:1;
+  gboolean contact_set:1;
   gboolean success:1;
 } ClientContext;
 
@@ -174,6 +177,13 @@ OUT:
 static void
 start_tube (ClientContext *context)
 {
+  if (!context->account_set || !context->contact_set)
+    {
+      g_print ("\nTo avoid interactive mode, you can use that command:\n"
+          "%s --account %s --contact %s\n", context->argv0,
+          context->account_path, context->contact_id);
+    }
+
   _client_create_tube_async (context->account_path,
     context->contact_id, NULL, create_tube_cb, context);
 }
@@ -314,8 +324,12 @@ chooser_contact (ClientContext *context)
   GHashTable *request;
 
   /* If a contact ID was passed in the options, use it */
-  if (context->contact_id != NULL)
-    start_tube (context);
+  if (context->contact_set)
+    {
+      g_assert (context->contact_id != NULL);
+      start_tube (context);
+      return;
+    }
 
   /* Otherwise, we'll get TpContact objects for all stored contacts on that
    * account. */
@@ -349,6 +363,14 @@ chooser_account (ClientContext *context)
       return;
     }
 
+  if (context->account_set)
+    {
+      g_assert (context->account != NULL);
+      g_assert (context->account_path != NULL);
+      chooser_contact (context);
+      return;
+    }
+
   for (l = context->accounts; l != NULL; l = l->next)
     {
       g_print ("%d) %s (%s)\n", ++count,
@@ -368,16 +390,9 @@ chooser_account (ClientContext *context)
       throw_error_message (context, "Invalid account number");
       return;
     }
-  context->account = g_object_ref (l->data);
 
-  /* If the account id was not in the options, print it now. It makes easier to
-  * copy/paste later. */
-  if (context->account_path == NULL)
-    {
-      context->account_path = g_strdup (tp_proxy_get_object_path (context->account));
-      g_print ("Going to use account: '%s'\n",
-          context->account_path + strlen (TP_ACCOUNT_OBJECT_PATH_BASE));
-    }
+  context->account = g_object_ref (l->data);
+  context->account_path = g_strdup (tp_proxy_get_object_path (context->account));
 
   chooser_contact (context);
 }
@@ -497,6 +512,7 @@ static void
 client_context_clear (ClientContext *context)
 {
   tp_clear_pointer (&context->loop, g_main_loop_unref);
+  g_free (context->argv0);
   g_free (context->account_path);
   g_free (context->contact_id);
   g_free (context->login);
@@ -516,11 +532,10 @@ main (gint argc, gchar *argv[])
   TpDBusDaemon *dbus = NULL;
   GError *error = NULL;
   ClientContext context = { 0, };
-  gchar *account_id = NULL;
   GOptionContext *optcontext;
   GOptionEntry options[] = {
       { "account", 'a',
-        0, G_OPTION_ARG_STRING, &account_id,
+        0, G_OPTION_ARG_STRING, &context.account_path,
         "The account ID",
         NULL },
       { "contact", 'c',
@@ -548,17 +563,30 @@ main (gint argc, gchar *argv[])
 
   g_set_application_name (PACKAGE_NAME);
 
-  /* Register an handler for the StreamTube channel we'll request */
   dbus = tp_dbus_daemon_dup (&error);
   if (dbus == NULL)
     goto OUT;
 
+  context.argv0 = g_strdup (argv[0]);
+  if (context.account_path != NULL)
+    context.account_set = TRUE;
+  if (context.contact_id != NULL)
+    context.contact_set = TRUE;
+
   /* If an account id was specified in options, then prepare it, otherwise
    * we get the account manager to get a list of all accounts */
-  if (account_id != NULL)
+  if (context.account_set)
     {
-      context.account_path = g_strconcat (TP_ACCOUNT_OBJECT_PATH_BASE,
-          account_id, NULL);
+      if (!g_str_has_prefix (context.account_path, TP_ACCOUNT_OBJECT_PATH_BASE))
+        {
+          gchar *account_id = context.account_path;
+
+          context.account_path = g_strconcat (TP_ACCOUNT_OBJECT_PATH_BASE,
+            account_id, NULL);
+
+          g_free (account_id);
+        }
+
       context.account = tp_account_new (dbus, context.account_path, &error);
       if (context.account == NULL)
         goto OUT;
@@ -591,7 +619,6 @@ OUT:
   tp_clear_object (&dbus);
   g_clear_error (&error);
   client_context_clear (&context);
-  g_free (account_id);
 
   return context.success ? EXIT_SUCCESS : EXIT_FAILURE;
 }
