@@ -74,48 +74,34 @@ splice_cb (GObject *source_object,
 }
 
 static void
-accept_tube_cb (TpChannel *channel,
-    const GValue *address,
-    const GError *error,
-    gpointer user_data,
-    GObject *weak_object)
+accept_tube_cb (GObject *object,
+    GAsyncResult *res,
+    gpointer user_data)
 {
-  GSocketAddress *socket_address = NULL;
+  TpChannel *channel = TP_CHANNEL (object);
+  TpStreamTubeConnection *stc;
   GInetAddress *inet_address = NULL;
+  GSocketAddress *socket_address = NULL;
   GSocket *socket = NULL;
   GSocketConnection *tube_connection = NULL;
   GSocketConnection *sshd_connection = NULL;
-  GError *err = NULL;
+  GError *error = NULL;
 
-  if (error != NULL)
-    {
-      session_complete (channel, error);
-      return;
-    }
+  stc = tp_stream_tube_channel_accept_finish (TP_STREAM_TUBE_CHANNEL (channel),
+      res, &error);
+  if (stc == NULL)
+    goto OUT;
 
-  /* Connect to the unix socket we received */
-  socket_address = tp_g_socket_address_from_variant (
-      TP_SOCKET_ADDRESS_TYPE_UNIX, address, &err);
-  if (socket_address == NULL)
-    goto OUT;
-  socket = g_socket_new (G_SOCKET_FAMILY_UNIX, G_SOCKET_TYPE_STREAM,
-      G_SOCKET_PROTOCOL_DEFAULT, &err);
-  if (socket == NULL)
-    goto OUT;
-  if (!g_socket_connect (socket, socket_address, NULL, &err))
-    goto OUT;
-  tube_connection = g_socket_connection_factory_create_connection (socket);
-  tp_clear_object (&socket_address);
-  tp_clear_object (&socket);
+  tube_connection = tp_stream_tube_connection_get_socket_connection (stc);
 
   /* Connect to the sshd */
   inet_address = g_inet_address_new_loopback (G_SOCKET_FAMILY_IPV4);
   socket_address = g_inet_socket_address_new (inet_address, 22);
   socket = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_STREAM,
-      G_SOCKET_PROTOCOL_DEFAULT, &err);
+      G_SOCKET_PROTOCOL_DEFAULT, &error);
   if (socket == NULL)
     goto OUT;
-  if (!g_socket_connect (socket, socket_address, NULL, &err))
+  if (!g_socket_connect (socket, socket_address, NULL, &error))
     goto OUT;
   sshd_connection = g_socket_connection_factory_create_connection (socket);
 
@@ -125,15 +111,15 @@ accept_tube_cb (TpChannel *channel,
 
 OUT:
 
-  if (err != NULL)
-    session_complete (channel, err);
+  if (error != NULL)
+    session_complete (channel, error);
 
+  tp_clear_object (&stc);
   tp_clear_object (&inet_address);
   tp_clear_object (&socket_address);
   tp_clear_object (&socket);
-  tp_clear_object (&tube_connection);
   tp_clear_object (&sshd_connection);
-  g_clear_error (&err);
+  g_clear_error (&error);
 }
 
 static void
@@ -146,36 +132,23 @@ got_channel_cb (TpSimpleHandler *handler,
     TpHandleChannelsContext *context,
     gpointer user_data)
 {
-  GValue value = { 0, };
   GList *l;
-
-  /* FIXME: Dummy value because passing NULL makes tp-glib crash */
-  g_value_init (&value, G_TYPE_STRING);
 
   for (l = channels; l != NULL; l = l->next)
     {
-      TpChannel *channel = l->data;
-
-      if (tp_strdiff (tp_channel_get_channel_type (channel),
-          TP_IFACE_CHANNEL_TYPE_STREAM_TUBE))
+      if (TP_IS_STREAM_TUBE_CHANNEL (l->data))
         {
-          g_print ("%s\n", tp_channel_get_channel_type (channel));
-          continue;
+          TpStreamTubeChannel *channel = l->data;
+
+          channel_list = g_list_prepend (channel_list, g_object_ref (channel));
+          g_signal_connect (channel, "invalidated",
+              G_CALLBACK (channel_invalidated_cb), NULL);
+
+          tp_stream_tube_channel_accept_async (channel, accept_tube_cb, NULL);
         }
-
-      channel_list = g_list_prepend (channel_list, g_object_ref (channel));
-      g_signal_connect (channel, "invalidated",
-          G_CALLBACK (channel_invalidated_cb), NULL);
-
-      tp_cli_channel_type_stream_tube_call_accept (channel, -1,
-          TP_SOCKET_ADDRESS_TYPE_UNIX,
-          TP_SOCKET_ACCESS_CONTROL_LOCALHOST, &value,
-          accept_tube_cb, NULL, NULL, NULL);
-
     }
-  tp_handle_channels_context_accept (context);
 
-  g_value_reset (&value);
+  tp_handle_channels_context_accept (context);
 }
 
 int
