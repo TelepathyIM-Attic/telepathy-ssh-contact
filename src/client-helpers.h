@@ -27,17 +27,15 @@
 G_BEGIN_DECLS
 
 void _client_create_tube_async (const gchar *account_path,
-    const gchar *contact_id, GCancellable *cancellable,
-    GAsyncReadyCallback callback, gpointer user_data);
+    const gchar *contact_id, GAsyncReadyCallback callback, gpointer user_data);
 
 GSocketConnection *_client_create_tube_finish (GAsyncResult *res,
-    TpChannel **channel,
-    GError **error);
+    TpChannel **channel, GError **error);
 
-GSocket * _client_create_local_socket (GError **error);
+GSocket *_client_create_local_socket (GError **error);
 
-GStrv  _client_create_exec_args (GSocket *socket,
-    const gchar *contact_id, const gchar *username);
+GStrv _client_create_exec_args (GSocket *socket, const gchar *contact_id,
+    const gchar *username);
 
 gboolean _capabilities_has_stream_tube (TpCapabilities *caps);
 

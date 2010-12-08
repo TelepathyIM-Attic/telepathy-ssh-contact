@@ -22,7 +22,6 @@
 
 #include <stdlib.h>
 #include <glib/gstdio.h>
-#include <gio/gunixsocketaddress.h>
 
 #include "client-helpers.h"
 #include "common.h"
@@ -31,30 +30,7 @@ typedef struct
 {
   GSocketConnection *connection;
   TpChannel *channel;
-
-  gulong cancelled_id;
-  gulong invalidated_id;
-
-  GCancellable *global_cancellable;
-  GCancellable *op_cancellable;
-  TpProxyPendingCall *offer_call;
-  gchar *unix_path;
 } CreateTubeData;
-
-static void
-unix_path_destroy (gchar *unix_path)
-{
-  if (unix_path != NULL)
-    {
-      gchar *p;
-
-      g_unlink (unix_path);
-      p = g_strrstr (unix_path, G_DIR_SEPARATOR_S);
-      *p = '\0';
-      g_rmdir (unix_path);
-      g_free (unix_path);
-    }
-}
 
 static void
 create_tube_data_free (CreateTubeData *data)
@@ -62,55 +38,37 @@ create_tube_data_free (CreateTubeData *data)
   tp_clear_object (&data->connection);
   tp_clear_object (&data->channel);
 
-  tp_clear_object (&data->global_cancellable);
-  tp_clear_object (&data->op_cancellable);
-  tp_clear_pointer (&data->unix_path, unix_path_destroy);
-
   g_slice_free (CreateTubeData, data);
 }
+
+static void create_tube_channel_invalidated_cb (TpProxy *proxy, guint domain,
+    gint code, gchar *message, GSimpleAsyncResult *simple);
+static void create_tube_incoming_cb (TpStreamTubeChannel *channel,
+    TpStreamTubeConnection *tube_connection, GSimpleAsyncResult *simple);
 
 static void
 create_tube_complete (GSimpleAsyncResult *simple, const GError *error)
 {
   CreateTubeData *data;
 
+  g_object_ref (simple);
+
   data = g_simple_async_result_get_op_res_gpointer (simple);
 
-  if (data->op_cancellable != NULL)
-    g_cancellable_cancel (data->op_cancellable);
-
-  if (data->offer_call != NULL)
-    tp_proxy_pending_call_cancel (data->offer_call);
-
-  if (data->cancelled_id != 0)
-    g_cancellable_disconnect (data->global_cancellable, data->cancelled_id);
-  data->cancelled_id = 0;
-
-  if (data->invalidated_id != 0)
-    g_signal_handler_disconnect (data->channel, data->invalidated_id);
-  data->invalidated_id = 0;
+  if (data->channel != NULL)
+    {
+      g_signal_handlers_disconnect_by_func (data->channel,
+          create_tube_channel_invalidated_cb, simple);
+      g_signal_handlers_disconnect_by_func (data->channel,
+          create_tube_incoming_cb, simple);
+    }
 
   if (error != NULL)
     g_simple_async_result_set_from_error (simple, error);
-  g_simple_async_result_complete_in_idle (simple);
-}
 
-static void
-create_tube_cancelled_cb (GCancellable *cancellable,
-    GSimpleAsyncResult *simple)
-{
-  CreateTubeData *data;
-  GError *error = NULL;
+  g_simple_async_result_complete (simple);
 
-  data = g_simple_async_result_get_op_res_gpointer (simple);
-
-  if (data->cancelled_id != 0)
-    g_signal_handler_disconnect (cancellable, data->cancelled_id);
-  data->cancelled_id = 0;
-
-  g_assert (g_cancellable_set_error_if_cancelled (cancellable, &error));
-  create_tube_complete (simple, error);
-  g_clear_error (&error);
+  g_object_unref (simple);
 }
 
 static void
@@ -125,54 +83,37 @@ create_tube_channel_invalidated_cb (TpProxy *proxy,
 }
 
 static void
-create_tube_socket_connected_cb (GObject *source_object,
+create_tube_incoming_cb (TpStreamTubeChannel *channel,
+    TpStreamTubeConnection *tube_connection,
+    GSimpleAsyncResult *simple)
+{
+  CreateTubeData *data;
+
+  data = g_simple_async_result_get_op_res_gpointer (simple);
+  data->connection = tp_stream_tube_connection_get_socket_connection (
+      tube_connection);
+  g_object_ref (data->connection);
+
+  create_tube_complete (simple, NULL);
+}
+
+static void
+create_tube_offer_cb (GObject *object,
     GAsyncResult *res,
     gpointer user_data)
 {
   GSimpleAsyncResult *simple = user_data;
-  CreateTubeData *data;
-  GSocketListener *listener = G_SOCKET_LISTENER (source_object);
   GError *error = NULL;
+  CreateTubeData *data;
 
   data = g_simple_async_result_get_op_res_gpointer (simple);
 
-  if (g_cancellable_is_cancelled (data->op_cancellable))
-    {
-      g_object_unref (simple);
-      return;
-    }
-
-  data->connection = g_socket_listener_accept_finish (listener, res, NULL,
-      &error);
-
-  if (data->connection != NULL)
-    {
-      /* Transfer ownership of unix path */
-      g_object_set_data_full (G_OBJECT (data->connection), "unix-path",
-          data->unix_path, (GDestroyNotify) unix_path_destroy);
-      data->unix_path = NULL;
-    }
-
-  create_tube_complete (simple, error);
+  if (!tp_stream_tube_channel_offer_finish (TP_STREAM_TUBE_CHANNEL (object),
+      res, &error))
+    create_tube_complete (simple, error);
 
   g_clear_error (&error);
   g_object_unref (simple);
-}
-
-static void
-create_tube_offer_cb (TpChannel *channel,
-    const GError *error,
-    gpointer user_data,
-    GObject *weak_object)
-{
-  GSimpleAsyncResult *simple = user_data;
-  CreateTubeData *data;
-
-  data = g_simple_async_result_get_op_res_gpointer (simple);
-  data->offer_call = NULL;
-
-  if (error != NULL)
-    create_tube_complete (simple, error);
 }
 
 static void
@@ -182,89 +123,43 @@ create_channel_cb (GObject *acr,
 {
   GSimpleAsyncResult *simple = user_data;
   CreateTubeData *data;
-  GSocketListener *listener = NULL;
-  gchar *dir;
-  GSocket *socket = NULL;
-  GSocketAddress *socket_address = NULL;
-  GValue *address;
-  GHashTable *parameters;
   GError *error = NULL;
 
   data = g_simple_async_result_get_op_res_gpointer (simple);
 
-  if (g_cancellable_is_cancelled (data->op_cancellable))
+  data->channel = tp_account_channel_request_create_and_handle_channel_finish (
+      TP_ACCOUNT_CHANNEL_REQUEST (acr), res, NULL, &error);
+  if (!TP_IS_STREAM_TUBE_CHANNEL (data->channel))
     {
+      tp_clear_object (&data->channel);
+
+      if (error == NULL)
+        error = g_error_new_literal (TP_ERRORS, TP_ERROR_NOT_IMPLEMENTED,
+            "Not supported channel type");
+
+      create_tube_complete (simple, error);
+
+      g_clear_error (&error);
       g_object_unref (simple);
       return;
     }
 
-  data->channel = tp_account_channel_request_create_and_handle_channel_finish (
-      TP_ACCOUNT_CHANNEL_REQUEST (acr), res, NULL, &error);
-   if (data->channel == NULL)
-    goto OUT;
-
-  data->invalidated_id = g_signal_connect (data->channel, "invalidated",
+  g_signal_connect (data->channel, "invalidated",
       G_CALLBACK (create_tube_channel_invalidated_cb), simple);
 
-  /* We are client side, but we have to offer a socket... So we offer an unix
-   * socket on which the service side can connect. We also create an IPv4 socket
-   * on which the ssh client can connect. When both sockets are connected,
-   * we can forward all communications between them. */
+  g_signal_connect_data (data->channel, "incoming",
+      G_CALLBACK (create_tube_incoming_cb),
+      g_object_ref (simple), (GClosureNotify) g_object_unref, 0);
 
-  listener = g_socket_listener_new ();
+  tp_stream_tube_channel_offer_async (TP_STREAM_TUBE_CHANNEL (data->channel),
+      NULL, create_tube_offer_cb, g_object_ref (simple));
 
-  /* Create temporary file for our unix socket */
-  dir = g_build_filename (g_get_tmp_dir (), "telepathy-ssh-XXXXXX", NULL);
-  dir = mkdtemp (dir);
-  data->unix_path = g_build_filename (dir, "unix-socket", NULL);
-  g_free (dir);
-
-  /* Create the unix socket, and listen for connection on it */
-  socket = g_socket_new (G_SOCKET_FAMILY_UNIX, G_SOCKET_TYPE_STREAM,
-      G_SOCKET_PROTOCOL_DEFAULT, &error);
-  if (socket == NULL)
-    goto OUT;
-  socket_address = g_unix_socket_address_new (data->unix_path);
-  if (!g_socket_bind (socket, socket_address, FALSE, &error))
-    goto OUT; 
-  if (!g_socket_listen (socket, &error))
-    goto OUT;
-  if (!g_socket_listener_add_socket (listener, socket, NULL, &error))
-    goto OUT;
-
-  g_socket_listener_accept_async (listener, data->op_cancellable,
-    create_tube_socket_connected_cb, g_object_ref (simple));
-
-  /* Offer the socket */
-  address = tp_address_variant_from_g_socket_address (socket_address,
-      TP_SOCKET_ADDRESS_TYPE_UNIX, &error);
-  if (address == NULL)
-    goto OUT;
-  parameters = g_hash_table_new (NULL, NULL);
-  data->offer_call = tp_cli_channel_type_stream_tube_call_offer (data->channel,
-      -1,
-      TP_SOCKET_ADDRESS_TYPE_UNIX, address,
-      TP_SOCKET_ACCESS_CONTROL_LOCALHOST, parameters,
-      create_tube_offer_cb, g_object_ref (simple), g_object_unref, NULL);
-  tp_g_value_slice_free (address);
-  g_hash_table_unref (parameters);
-
-OUT:
-
-  if (error != NULL)
-    create_tube_complete (simple, error);
-
-  tp_clear_object (&listener);
-  tp_clear_object (&socket);
-  tp_clear_object (&socket_address);
-  g_clear_error (&error);
   g_object_unref (simple);
 }
 
 void
 _client_create_tube_async (const gchar *account_path,
     const gchar *contact_id,
-    GCancellable *cancellable,
     GAsyncReadyCallback callback,
     gpointer user_data)
 {
@@ -275,14 +170,6 @@ _client_create_tube_async (const gchar *account_path,
   TpAccount *account = NULL;
   TpAccountChannelRequest *acr;
   GError *error = NULL;
-
-  if (g_cancellable_is_cancelled (cancellable))
-    {
-      g_simple_async_report_error_in_idle (NULL, callback,
-          user_data, G_IO_ERROR, G_IO_ERROR_CANCELLED,
-          "Operation has been cancelled");
-      return;
-    }
 
   dbus = tp_dbus_daemon_dup (&error);
   if (dbus != NULL)
@@ -299,14 +186,6 @@ _client_create_tube_async (const gchar *account_path,
       _client_create_tube_finish);
 
   data = g_slice_new0 (CreateTubeData);
-  data->op_cancellable = g_cancellable_new ();
-  if (cancellable != NULL)
-    {
-      data->global_cancellable = g_object_ref (cancellable);
-      data->cancelled_id = g_cancellable_connect (data->global_cancellable,
-          G_CALLBACK (create_tube_cancelled_cb), simple, NULL);
-    }
-
   g_simple_async_result_set_op_res_gpointer (simple, data,
       (GDestroyNotify) create_tube_data_free);
 
@@ -323,7 +202,7 @@ _client_create_tube_async (const gchar *account_path,
 
   acr = tp_account_channel_request_new (account, request, G_MAXINT64);
   tp_account_channel_request_create_and_handle_channel_async (acr,
-      data->op_cancellable, create_channel_cb, simple);
+      NULL, create_channel_cb, simple);
 
   g_hash_table_unref (request);
   g_object_unref (dbus);

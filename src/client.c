@@ -185,7 +185,7 @@ start_tube (ClientContext *context)
     }
 
   _client_create_tube_async (context->account_path,
-    context->contact_id, NULL, create_tube_cb, context);
+    context->contact_id, create_tube_cb, context);
 }
 
 static void
