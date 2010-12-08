@@ -212,8 +212,7 @@ start_tube (gpointer user_data)
   g_signal_emit_by_name (self, "tab-initialized");
 
   get_connection_info (self, &account_path, &contact_id, NULL);
-  _client_create_tube_async (account_path, contact_id, NULL, create_tube_cb,
-      self);
+  _client_create_tube_async (account_path, contact_id, create_tube_cb, self);
 
   return FALSE;
 }
