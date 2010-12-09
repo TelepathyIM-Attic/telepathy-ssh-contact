@@ -78,8 +78,8 @@ create_tube_channel_invalidated_cb (TpProxy *proxy,
     gchar *message,
     GSimpleAsyncResult *simple)
 {
-    create_tube_complete (simple,
-        tp_proxy_get_invalidated (proxy));
+  create_tube_complete (simple,
+      tp_proxy_get_invalidated (proxy));
 }
 
 static void
