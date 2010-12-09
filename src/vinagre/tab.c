@@ -44,13 +44,6 @@ struct _SshContactTabPrivate
 G_DEFINE_TYPE (SshContactTab, ssh_contact_tab, VINAGRE_TYPE_TAB)
 
 static void
-ssh_disconnected_cb (VteTerminal *ssh,
-    SshContactTab *self)
-{
-  g_signal_emit_by_name (self, "tab-disconnected");
-}
-
-static void
 get_connection_info (SshContactTab *self,
     const gchar **account_path,
     const gchar **contact_id,
@@ -100,14 +93,47 @@ impl_get_screenshot (VinagreTab *tab)
 }
 
 static void
+disconnect_tab (SshContactTab *self)
+{
+  if (self->priv->connected)
+    g_signal_emit_by_name (self, "tab-disconnected");
+  else
+    g_signal_emit_by_name (self, "tab-auth-failed", "");
+}
+ 
+static void
+channel_invalidated_cb (TpChannel *channel,
+    guint domain,
+    gint code,
+    gchar *message,
+    SshContactTab *self)
+{
+  disconnect_tab (self);
+}
+
+static void
+leave (SshContactTab *self)
+{
+  if (self->priv->channel != NULL &&
+      tp_proxy_get_invalidated (self->priv->channel) == NULL)
+    tp_cli_channel_call_close (context->channel, -1, NULL, NULL, NULL, NULL);
+  else
+    disconnect_tab (self);
+}
+
+static void
+ssh_disconnected_cb (VteTerminal *ssh,
+    SshContactTab *self)
+{
+  leave (self);
+}
+
+static void
 throw_error (SshContactTab *self,
     const GError *error)
 {
   g_debug ("ERROR: %s", error->message);
-  if (self->priv->connected)
-    g_signal_emit_by_name (self, "tab-disconnected");
-  else
-    g_signal_emit_by_name (self, "tab-auth-failed", error->message);
+  leave (self);
 }
 
 static void
@@ -121,7 +147,7 @@ splice_cb (GObject *source_object,
   if (!_g_io_stream_splice_finish (res, &error))
     throw_error (self, error);
   else
-      g_signal_emit_by_name (self, "tab-disconnected");
+    leave (self);
 
   g_clear_error (&error);
 }
@@ -173,6 +199,9 @@ create_tube_cb (GObject *source_object,
       g_clear_error (&error);
       return;
     }
+
+  g_signal_connect (self->priv->channel, "invalidated",
+      G_CALLBACK (channel_invalidated_cb), self);
 
   listener = g_socket_listener_new ();
   socket = _client_create_local_socket (&error);

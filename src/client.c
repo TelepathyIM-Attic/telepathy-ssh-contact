@@ -54,12 +54,32 @@ typedef struct
 } ClientContext;
 
 static void
+channel_invalidated_cb (TpChannel *channel,
+    guint domain,
+    gint code,
+    gchar *message,
+    ClientContext *context)
+{
+  g_main_loop_quit (context->loop);
+}
+
+static void
+leave (ClientContext *context)
+{
+  if (context->channel != NULL &&
+      tp_proxy_get_invalidated (context->channel) == NULL)
+    tp_cli_channel_call_close (context->channel, -1, NULL, NULL, NULL, NULL);
+  else
+    g_main_loop_quit (context->loop);
+}
+
+static void
 throw_error_message (ClientContext *context,
     const gchar *message)
 {
   g_print ("Error: %s\n", message);
   context->success = FALSE;
-  g_main_loop_quit (context->loop);
+  leave (context);
 }
 
 static void
@@ -76,7 +96,7 @@ ssh_client_watch_cb (GPid pid,
 {
   ClientContext *context = user_data;
 
-  g_main_loop_quit (context->loop);
+  leave (context);
   g_spawn_close_pid (pid);
 }
 
@@ -91,7 +111,7 @@ splice_cb (GObject *source_object,
   if (!_g_io_stream_splice_finish (res, &error))
     throw_error (context, error);
   else
-    g_main_loop_quit (context->loop);
+    leave (context);
 
   g_clear_error (&error);
 }
@@ -139,6 +159,9 @@ create_tube_cb (GObject *source_object,
       g_clear_error (&error);
       return;
     }
+
+  g_signal_connect (context->channel, "invalidated",
+      G_CALLBACK (channel_invalidated_cb), context);
 
   listener = g_socket_listener_new ();
   socket = _client_create_local_socket (&error);

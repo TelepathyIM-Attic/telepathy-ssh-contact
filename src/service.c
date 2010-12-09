@@ -30,8 +30,19 @@
 static GMainLoop *loop = NULL;
 static GList *channel_list = NULL;
 
-static void channel_invalidated_cb (TpChannel *channel, guint domain, gint code,
-    gchar *message, gpointer user_data);
+static void
+channel_invalidated_cb (TpChannel *channel,
+    guint domain,
+    gint code,
+    gchar *message,
+    gpointer user_data)
+{
+  channel_list = g_list_remove (channel_list, channel);
+  g_object_unref (channel);
+
+  if (channel_list == NULL)
+    g_main_loop_quit (loop);
+}
 
 static void
 session_complete (TpChannel *channel, const GError *error)
@@ -42,23 +53,7 @@ session_complete (TpChannel *channel, const GError *error)
           error ? error->message : "No error message");
     }
 
-  g_signal_handlers_disconnect_by_func (channel, channel_invalidated_cb, NULL);
   tp_cli_channel_call_close (channel, -1, NULL, NULL, NULL, NULL);
-  channel_list = g_list_remove (channel_list, channel);
-  g_object_unref (channel);
-
-  if (channel_list == NULL)
-    g_main_loop_quit (loop);
-}
-
-static void
-channel_invalidated_cb (TpChannel *channel,
-    guint domain,
-    gint code,
-    gchar *message,
-    gpointer user_data)
-{
-  session_complete (channel, tp_proxy_get_invalidated (TP_PROXY (channel)));
 }
 
 static void
