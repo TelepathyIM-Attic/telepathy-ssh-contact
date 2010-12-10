@@ -295,7 +295,7 @@ _client_create_exec_args (GSocket *socket,
       g_ptr_array_add (args, str);
     }
 
-  if (username != NULL && *username != '\0')
+  if (!tp_str_empty (username))
     {
       g_ptr_array_add (args, g_strdup ("-l"));
       g_ptr_array_add (args, g_strdup (username));
