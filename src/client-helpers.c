@@ -20,9 +20,6 @@
 
 #include "config.h"
 
-#include <stdlib.h>
-#include <glib/gstdio.h>
-
 #include "client-helpers.h"
 #include "common.h"
 

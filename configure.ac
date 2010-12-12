@@ -30,7 +30,6 @@ PKG_CHECK_MODULES(SSH_CONTACT,
   telepathy-glib >= 0.13.2
   glib-2.0 >= 2.24
   gio-2.0
-  gio-unix-2.0
 ])
 
 # -----------------------------------------------------------

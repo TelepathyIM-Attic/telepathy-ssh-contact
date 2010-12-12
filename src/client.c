@@ -20,12 +20,11 @@
 
 #include "config.h"
 
-#include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
 
-#include <glib/gstdio.h>
-#include <gio/gunixsocketaddress.h>
+#include <gio/gio.h>
 #include <telepathy-glib/telepathy-glib.h>
 
 #include "client-helpers.h"

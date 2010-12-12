@@ -22,7 +22,7 @@
 
 #include <stdlib.h>
 
-#include <gio/gunixsocketaddress.h>
+#include <gio/gio.h>
 #include <telepathy-glib/telepathy-glib.h>
 
 #include "common.h"

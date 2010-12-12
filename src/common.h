@@ -22,7 +22,6 @@
 #define __COMMON_H__
 
 #include <gio/gio.h>
-#include <telepathy-glib/telepathy-glib.h>
 
 #define TUBE_SERVICE "x-ssh-contact"
 
