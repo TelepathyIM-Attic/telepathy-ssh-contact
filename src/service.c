@@ -102,7 +102,8 @@ accept_tube_cb (GObject *object,
 
   /* Splice tube and ssh connections */
   _g_io_stream_splice_async (G_IO_STREAM (tube_connection),
-      G_IO_STREAM (sshd_connection), splice_cb, channel);
+      G_IO_STREAM (sshd_connection), _G_IO_STREAM_SPLICE_NONE,
+      G_PRIORITY_DEFAULT, NULL, splice_cb, channel);
 
 OUT:
 

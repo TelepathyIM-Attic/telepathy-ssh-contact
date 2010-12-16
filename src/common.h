@@ -27,10 +27,23 @@
 
 G_BEGIN_DECLS
 
-void _g_io_stream_splice_async (GIOStream *stream1, GIOStream *stream2,
-    GAsyncReadyCallback callback, gpointer user_data);
+typedef enum {
+  _G_IO_STREAM_SPLICE_NONE          = 0,
+  _G_IO_STREAM_SPLICE_CLOSE_STREAM1 = (1 << 0),
+  _G_IO_STREAM_SPLICE_CLOSE_STREAM2 = (1 << 1),
+  _G_IO_STREAM_SPLICE_WAIT_FOR_BOTH = (1 << 2),
+} _GIOStreamSpliceFlags;
 
-gboolean _g_io_stream_splice_finish (GAsyncResult *result, GError **error);
+void           _g_io_stream_splice_async      (GIOStream            *stream1,
+					       GIOStream            *stream2,
+					       _GIOStreamSpliceFlags flags,
+					       int                   io_priority,
+					       GCancellable         *cancellable,
+					       GAsyncReadyCallback   callback,
+					       gpointer              user_data);
+
+gboolean       _g_io_stream_splice_finish     (GAsyncResult         *result,
+                                               GError              **error);
 
 G_END_DECLS
 

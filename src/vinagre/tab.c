@@ -175,7 +175,8 @@ ssh_socket_connected_cb (GObject *source_object,
 
   /* Splice tube and ssh connections */
   _g_io_stream_splice_async (G_IO_STREAM (self->priv->tube_connection),
-      G_IO_STREAM (self->priv->ssh_connection), splice_cb, self);
+      G_IO_STREAM (self->priv->ssh_connection), _G_IO_STREAM_SPLICE_NONE,
+      G_PRIORITY_DEFAULT, NULL, splice_cb, self);
 }
 
 static void
