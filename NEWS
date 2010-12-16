@@ -1,3 +1,17 @@
+NEW in 0.4
+==========
+
+ - Use TpStreamTube new API from telepathy-glib
+ - Correctly Close() channels after usage
+ - Do not depend on gio-unix anymore
+
+NEW in 0.3
+==========
+
+ - Improved CLI
+ - Initial vinagre plugin
+ - More tolerant to any error that can happen
+
 NEW in 0.2
 ==========
 
