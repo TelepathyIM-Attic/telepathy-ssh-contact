@@ -1,3 +1,8 @@
+NEW in 0.5
+==========
+
+ - Fixes bug #33579 - allow user to pass options to the ssh client
+
 NEW in 0.4
 ==========
 
