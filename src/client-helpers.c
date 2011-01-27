@@ -260,7 +260,8 @@ _client_create_local_socket (GError **error)
 GStrv
 _client_create_exec_args (GSocket *socket,
     const gchar *contact_id,
-    const gchar *username)
+    const gchar *username,
+    gchar **ssh_opts)
 {
   GPtrArray *args;
   GSocketAddress *socket_address;
@@ -268,6 +269,7 @@ _client_create_exec_args (GSocket *socket,
   guint16 port;
   gchar *host;
   gchar *str;
+  gchar **opt;
 
   /* Get the local host and port on which sshd is running */
   socket_address = g_socket_get_local_address (socket, NULL);
@@ -296,6 +298,14 @@ _client_create_exec_args (GSocket *socket,
     {
       g_ptr_array_add (args, g_strdup ("-l"));
       g_ptr_array_add (args, g_strdup (username));
+    }
+
+  if (ssh_opts != NULL)
+    {
+      for (opt = ssh_opts; *opt != NULL; opt++)
+        {
+          g_ptr_array_add (args, g_strdup (*opt));
+        }
     }
 
   g_ptr_array_add (args, NULL);

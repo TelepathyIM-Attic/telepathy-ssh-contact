@@ -38,6 +38,7 @@ typedef struct
   gchar *account_path;
   gchar *contact_id;
   gchar *login;
+  gchar **ssh_opts;
 
   GList *accounts;
   guint n_readying_connections;
@@ -176,7 +177,7 @@ create_tube_cb (GObject *source_object,
       ssh_socket_connected_cb, context);
 
   args = _client_create_exec_args (socket, context->contact_id,
-      context->login);
+      context->login, context->ssh_opts);
 
   /* spawn ssh client */
   if (g_spawn_async (NULL, args, NULL,
@@ -539,6 +540,7 @@ client_context_clear (ClientContext *context)
   g_free (context->account_path);
   g_free (context->contact_id);
   g_free (context->login);
+  g_strfreev (context->ssh_opts);
 
   g_list_foreach (context->accounts, (GFunc) g_object_unref, NULL);
   g_list_free (context->accounts);
@@ -569,12 +571,16 @@ main (gint argc, gchar *argv[])
         0, G_OPTION_ARG_STRING, &context.login,
         "Specifies the user to log in as on the remote machine",
         NULL },
+      { G_OPTION_REMAINING, 0,
+        0, G_OPTION_ARG_STRING_ARRAY, &context.ssh_opts,
+        NULL,
+        NULL },
       { NULL }
   };
 
   g_type_init ();
 
-  optcontext = g_option_context_new ("- ssh-contact");
+  optcontext = g_option_context_new ("-- [OPTIONS FOR SSH CLIENT]");
   g_option_context_add_main_entries (optcontext, options, NULL);
   if (!g_option_context_parse (optcontext, &argc, &argv, &error))
     {

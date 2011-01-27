@@ -35,7 +35,7 @@ GSocketConnection *_client_create_tube_finish (GAsyncResult *res,
 GSocket *_client_create_local_socket (GError **error);
 
 GStrv _client_create_exec_args (GSocket *socket, const gchar *contact_id,
-    const gchar *username);
+    const gchar *username, gchar **ssh_opts);
 
 gboolean _capabilities_has_stream_tube (TpCapabilities *caps);
 

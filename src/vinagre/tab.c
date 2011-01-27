@@ -217,7 +217,7 @@ create_tube_cb (GObject *source_object,
       ssh_socket_connected_cb, self);
 
   get_connection_info (self, NULL, &contact_id, &username);
-  args = _client_create_exec_args (socket, contact_id, username);
+  args = _client_create_exec_args (socket, contact_id, username, NULL);
   vte_terminal_fork_command (VTE_TERMINAL (self->priv->vte), "ssh", args,
       NULL, NULL, FALSE, FALSE, FALSE);
 
