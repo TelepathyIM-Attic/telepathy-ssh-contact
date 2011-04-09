@@ -21,7 +21,6 @@
 #include "config.h"
 
 #include "client-helpers.h"
-#include "common.h"
 
 typedef struct
 {

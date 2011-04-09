@@ -25,8 +25,6 @@
 #include <gio/gio.h>
 #include <telepathy-glib/telepathy-glib.h>
 
-#include "common.h"
-
 static GMainLoop *loop = NULL;
 static GList *channel_list = NULL;
 
@@ -63,7 +61,7 @@ splice_cb (GObject *source_object,
 {
   GError *error = NULL;
 
-  _g_io_stream_splice_finish (res, &error);
+  g_io_stream_splice_finish (res, &error);
   session_complete (channel, error);
   g_clear_error (&error);
 }
@@ -101,8 +99,8 @@ accept_tube_cb (GObject *object,
   sshd_connection = g_socket_connection_factory_create_connection (socket);
 
   /* Splice tube and ssh connections */
-  _g_io_stream_splice_async (G_IO_STREAM (tube_connection),
-      G_IO_STREAM (sshd_connection), _G_IO_STREAM_SPLICE_NONE,
+  g_io_stream_splice_async (G_IO_STREAM (tube_connection),
+      G_IO_STREAM (sshd_connection), G_IO_STREAM_SPLICE_NONE,
       G_PRIORITY_DEFAULT, NULL, splice_cb, channel);
 
 OUT:

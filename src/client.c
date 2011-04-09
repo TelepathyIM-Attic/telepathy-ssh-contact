@@ -28,7 +28,6 @@
 #include <telepathy-glib/telepathy-glib.h>
 
 #include "client-helpers.h"
-#include "common.h"
 
 typedef struct
 {
@@ -108,7 +107,7 @@ splice_cb (GObject *source_object,
   ClientContext *context = user_data;
   GError *error = NULL;
 
-  if (!_g_io_stream_splice_finish (res, &error))
+  if (!g_io_stream_splice_finish (res, &error))
     throw_error (context, error);
   else
     leave (context);
@@ -135,8 +134,8 @@ ssh_socket_connected_cb (GObject *source_object,
     }
 
   /* Splice tube and ssh connections */
-  _g_io_stream_splice_async (G_IO_STREAM (context->tube_connection),
-      G_IO_STREAM (context->ssh_connection), _G_IO_STREAM_SPLICE_NONE,
+  g_io_stream_splice_async (G_IO_STREAM (context->tube_connection),
+      G_IO_STREAM (context->ssh_connection), G_IO_STREAM_SPLICE_NONE,
       G_PRIORITY_DEFAULT, NULL, splice_cb, context);
 }
 

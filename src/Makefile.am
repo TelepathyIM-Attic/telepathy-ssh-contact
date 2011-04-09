@@ -15,12 +15,10 @@ bin_PROGRAMS = ssh-contact
 libexec_PROGRAMS = ssh-contact-service
 
 ssh_contact_SOURCES = \
-	common.c common.h \
 	client-helpers.c client-helpers.h \
 	client.c
 
 ssh_contact_service_SOURCES = \
-	common.c common.h \
 	service.c
 
 servicefiledir = $(datadir)/dbus-1/services
