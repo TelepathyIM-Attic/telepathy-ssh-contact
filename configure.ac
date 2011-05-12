@@ -1,4 +1,4 @@
-m4_define(released, 0)
+m4_define(released, 1)
 AC_INIT(ssh-contact, 0.6, https://bugs.freedesktop.org/enter_bug.cgi?product=Telepathy&component=ssh-contact)
 AC_PREREQ(2.59)
 AC_COPYRIGHT([
