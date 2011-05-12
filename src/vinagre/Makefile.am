@@ -20,7 +20,6 @@ libssh_contact_la_SOURCES =			\
 	tab.h tab.c				\
 	tree-view.h tree-view.c			\
 	../client-helpers.h ../client-helpers.c	\
-	../common.h ../common.c			\
 	$(NULL)
 
 plugin_in_files = ssh-contact.vinagre-plugin.desktop.in

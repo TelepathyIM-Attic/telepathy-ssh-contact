@@ -30,7 +30,6 @@
 #include "tab.h"
 #include "connection.h"
 #include "../client-helpers.h"
-#include "../common.h"
 
 struct _SshContactTabPrivate
 {
@@ -144,7 +143,7 @@ splice_cb (GObject *source_object,
   SshContactTab *self = user_data;
   GError *error = NULL;
 
-  if (!_g_io_stream_splice_finish (res, &error))
+  if (!g_io_stream_splice_finish (res, &error))
     throw_error (self, error);
   else
     leave (self);
@@ -174,8 +173,8 @@ ssh_socket_connected_cb (GObject *source_object,
   self->priv->connected = TRUE;
 
   /* Splice tube and ssh connections */
-  _g_io_stream_splice_async (G_IO_STREAM (self->priv->tube_connection),
-      G_IO_STREAM (self->priv->ssh_connection), _G_IO_STREAM_SPLICE_NONE,
+  g_io_stream_splice_async (G_IO_STREAM (self->priv->tube_connection),
+      G_IO_STREAM (self->priv->ssh_connection), G_IO_STREAM_SPLICE_NONE,
       G_PRIORITY_DEFAULT, NULL, splice_cb, self);
 }
 
