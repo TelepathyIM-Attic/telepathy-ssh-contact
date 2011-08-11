@@ -298,6 +298,12 @@ stored_channel_prepare_cb (GObject *object,
   set = tp_channel_group_get_members (channel);
   handles = tp_intset_to_array (set);
 
+  if (handles->len <= 0)
+  {
+    throw_error_message(context, "No contacts available");
+    return;
+  }
+
   tp_connection_get_contacts_by_handle (connection, handles->len,
       (TpHandle *) handles->data, G_N_ELEMENTS (features), features,
       got_contacts_cb, context, NULL, NULL);
