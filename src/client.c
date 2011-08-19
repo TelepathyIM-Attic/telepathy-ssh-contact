@@ -440,6 +440,17 @@ main (gint argc, gchar *argv[])
       TpAccount *account;
       GArray *features;
 
+      /* Fixup account path if needed */
+      if (!g_str_has_prefix (context.account_path, TP_ACCOUNT_OBJECT_PATH_BASE))
+        {
+          gchar *account_id = context.account_path;
+
+          context.account_path = g_strconcat (TP_ACCOUNT_OBJECT_PATH_BASE,
+            account_id, NULL);
+
+           g_free (account_id);
+        }
+
       account = tp_simple_client_factory_ensure_account (factory,
           context.account_path, NULL, &error);
       if (account == NULL)
