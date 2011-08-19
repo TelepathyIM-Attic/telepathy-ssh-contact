@@ -149,18 +149,22 @@ int
 main (gint argc, gchar *argv[])
 {
   TpDBusDaemon *dbus = NULL;
+  TpSimpleClientFactory *factory = NULL;
   TpBaseClient *client = NULL;
   gboolean success = TRUE;
   GError *error = NULL;
 
   g_type_init ();
 
+  tp_debug_set_flags (g_getenv ("SSH_CONTACT_DEBUG"));
+
   dbus = tp_dbus_daemon_dup (&error);
   if (dbus == NULL)
     goto OUT;
 
-  client = tp_simple_handler_new (dbus, FALSE, FALSE, "SSHContact",
-      FALSE, got_channel_cb, NULL, NULL);
+  factory = (TpSimpleClientFactory *) tp_automatic_client_factory_new (dbus);
+  client = tp_simple_handler_new_with_factory (factory, FALSE, FALSE,
+      "SSHContact", FALSE, got_channel_cb, NULL, NULL);
 
   tp_base_client_take_handler_filter (client, tp_asv_new (
       TP_PROP_CHANNEL_CHANNEL_TYPE, G_TYPE_STRING,
@@ -189,6 +193,7 @@ OUT:
 
   tp_clear_pointer (&loop, g_main_loop_unref);
   tp_clear_object (&dbus);
+  tp_clear_object (&factory);
   tp_clear_object (&client);
   g_clear_error (&error);
 

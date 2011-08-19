@@ -100,9 +100,6 @@ create_tube_offer_cb (GObject *object,
 {
   GSimpleAsyncResult *simple = user_data;
   GError *error = NULL;
-  CreateTubeData *data;
-
-  data = g_simple_async_result_get_op_res_gpointer (simple);
 
   if (!tp_stream_tube_channel_offer_finish (TP_STREAM_TUBE_CHANNEL (object),
       res, &error))
@@ -154,7 +151,7 @@ create_channel_cb (GObject *acr,
 }
 
 void
-_client_create_tube_async (const gchar *account_path,
+_client_create_tube_async (TpAccount *account,
     const gchar *contact_id,
     GAsyncReadyCallback callback,
     gpointer user_data)
@@ -162,21 +159,7 @@ _client_create_tube_async (const gchar *account_path,
   GSimpleAsyncResult *simple;
   CreateTubeData *data;
   GHashTable *request;
-  TpDBusDaemon *dbus;
-  TpAccount *account = NULL;
   TpAccountChannelRequest *acr;
-  GError *error = NULL;
-
-  dbus = tp_dbus_daemon_dup (&error);
-  if (dbus != NULL)
-    account = tp_account_new (dbus, account_path, &error);
-  if (account == NULL)
-    {
-      g_simple_async_report_gerror_in_idle (NULL, callback, user_data, error);
-      g_clear_error (&error);
-      tp_clear_object (&dbus);
-      return;
-    }
 
   simple = g_simple_async_result_new (NULL, callback, user_data,
       _client_create_tube_finish);
@@ -201,8 +184,6 @@ _client_create_tube_async (const gchar *account_path,
       NULL, create_channel_cb, simple);
 
   g_hash_table_unref (request);
-  g_object_unref (dbus);
-  g_object_unref (account);
   g_object_unref (acr);
 }
 

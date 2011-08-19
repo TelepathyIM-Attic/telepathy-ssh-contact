@@ -27,7 +27,7 @@ IT_PROG_INTLTOOL([0.35.0])
 
 PKG_CHECK_MODULES(SSH_CONTACT,
 [
-  telepathy-glib >= 0.13.9
+  telepathy-glib >= 0.15.5
   glib-2.0 >= 2.28
   gio-2.0
 ])
