@@ -1,7 +1,4 @@
 # List of source files containing translatable strings.
 # Please keep this file sorted alphabetically.
 
-src/vinagre/plugin.c
-src/vinagre/ssh-contact.vinagre-plugin.desktop.in
-src/vinagre/tab.c
 
