@@ -1,7 +1,3 @@
-if HAVE_VINAGRE
-SUBDIRS = vinagre
-endif
-
 AM_CPPFLAGS =			\
 	$(ERROR_CFLAGS)		\
 	$(SSH_CONTACT_CFLAGS)	\
