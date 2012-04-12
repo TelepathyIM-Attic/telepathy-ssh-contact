@@ -61,7 +61,7 @@ leave (ClientContext *context)
 {
   if (context->channel != NULL &&
       tp_proxy_get_invalidated (context->channel) == NULL)
-    tp_cli_channel_call_close (context->channel, -1, NULL, NULL, NULL, NULL);
+    tp_channel_close_async (context->channel, NULL, NULL);
   else
     g_main_loop_quit (context->loop);
 }

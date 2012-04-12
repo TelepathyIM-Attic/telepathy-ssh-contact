@@ -51,7 +51,7 @@ session_complete (TpChannel *channel, const GError *error)
           error ? error->message : "No error message");
     }
 
-  tp_cli_channel_call_close (channel, -1, NULL, NULL, NULL, NULL);
+  tp_channel_close_async (channel, NULL, NULL);
 }
 
 static void
