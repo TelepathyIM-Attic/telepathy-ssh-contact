@@ -296,34 +296,9 @@ _client_create_exec_args (GSocket *socket,
 gboolean
 _capabilities_has_stream_tube (TpCapabilities *caps)
 {
-  GPtrArray *classes;
-  guint i;
-
   if (caps == NULL)
     return FALSE;
 
-  classes = tp_capabilities_get_channel_classes (caps);
-  for (i = 0; i < classes->len; i++)
-    {
-      GValueArray *arr = g_ptr_array_index (classes, i);
-      GHashTable *fixed;
-      const gchar *chan_type;
-      const gchar *service;
-      TpHandleType handle_type;
-
-      fixed = g_value_get_boxed (g_value_array_get_nth (arr, 0));
-      chan_type = tp_asv_get_string (fixed, TP_PROP_CHANNEL_CHANNEL_TYPE);
-      service = tp_asv_get_string (fixed,
-          TP_PROP_CHANNEL_TYPE_STREAM_TUBE_SERVICE);
-      handle_type = tp_asv_get_uint32 (fixed,
-          TP_PROP_CHANNEL_TARGET_HANDLE_TYPE, NULL);
-
-      if (!tp_strdiff (chan_type, TP_IFACE_CHANNEL_TYPE_STREAM_TUBE) &&
-          handle_type == TP_HANDLE_TYPE_CONTACT &&
-          (!tp_capabilities_is_specific_to_contact (caps) ||
-           !tp_strdiff (service, TUBE_SERVICE)))
-        return TRUE;
-    }
-
-  return FALSE;
+  return tp_capabilities_supports_stream_tubes (caps, TP_HANDLE_TYPE_CONTACT,
+      TUBE_SERVICE);
 }
