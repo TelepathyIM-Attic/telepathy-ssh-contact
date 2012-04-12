@@ -292,7 +292,7 @@ choose_contact (ClientContext *context,
   str = fgets (buffer, sizeof (buffer), stdin);
   if (str != NULL)
     {
-      guint i; 
+      guint i;
 
       str[strlen (str) - 1] = '\0';
       i = atoi (str) - 1;
